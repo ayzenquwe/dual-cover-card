@@ -1,4 +1,4 @@
-# Top Down Bottom Up Card
+# Dual Cover Card
 
 A Home Assistant dashboard card for blinds and honeycomb shades with independently controlled top and bottom edges. Built by [kevinconsen](https://github.com/KevinConsen).
 
