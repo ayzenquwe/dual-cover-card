@@ -1,5 +1,5 @@
 /*!
-Top Down Bottom Up Card
+Dual Cover Card
 MIT License
 
 Copyright (c) 2026 kevinconsen
@@ -22,14 +22,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 20. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.2. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
     "error_status": "Error",
     "tap_warning": "Deze tikactie gaat voor op het openen van de uitgebreide bediening. Bij een fout opent tikken altijd de foutdetails.",
     "name": "Plisségordijn",
-    "description": "Plisségordijn met twee covers.",
+    "description": "Top-down/bottom-up-bediening voor gordijnen met twee covers.",
     "title": "Naam",
     "top_entity": "Bovenste cover",
     "bottom_entity": "Onderste cover",
@@ -95,13 +95,18 @@ const plisseText = {
     "motion_timeout": "De doelpositie is na twee minuten niet bevestigd. Controleer de cover.",
     "not_reached": "De cover is gestopt voordat de doelpositie werd bereikt.",
     "request_accepted": "De opdracht voor de andere cover is wel bevestigd; dit betekent niet dat die al op de doelpositie staat.",
-    "command_issues": "Niet alle opdrachten konden worden bevestigd."
+    "command_issues": "Niet alle opdrachten konden worden bevestigd.",
+    "compact_orientation": "Compacte indeling",
+    "vertical": "Verticaal",
+    "horizontal": "Horizontaal",
+    "select_covers": "Kies beide covers",
+    "invalid_orientation": "Kies vertical of horizontal."
   },
   "en": {
     "error_status": "Error",
     "tap_warning": "This tap action takes priority over opening detailed controls. When an error occurs, tapping always opens the error details.",
     "name": "Honeycomb shades",
-    "description": "Honeycomb shades with two covers.",
+    "description": "Top-down/bottom-up controls for blinds and shades with two covers.",
     "title": "Name",
     "top_entity": "Top cover",
     "bottom_entity": "Bottom cover",
@@ -167,7 +172,12 @@ const plisseText = {
     "motion_timeout": "The target position was not confirmed within two minutes. Check the cover.",
     "not_reached": "The cover stopped before reaching its target position.",
     "request_accepted": "The command for the other cover was acknowledged; this does not mean it has reached its target yet.",
-    "command_issues": "Not all commands could be confirmed."
+    "command_issues": "Not all commands could be confirmed.",
+    "compact_orientation": "Compact orientation",
+    "vertical": "Vertical",
+    "horizontal": "Horizontal",
+    "select_covers": "Choose both covers",
+    "invalid_orientation": "Choose vertical or horizontal."
   }
 };
 function plisseLanguage(hass) { return (hass?.locale?.language || hass?.language || "en").toLowerCase().split(/[-_]/)[0] === "nl" ? "nl" : "en"; }
@@ -230,24 +240,25 @@ class PlisseCard extends HTMLElement {
     };
   }
   static getStubConfig() {
-    return { top_entity: '', bottom_entity: '', title: '', size: 'medium', show_status: true, show_position: false, show_buttons: false, open_popup: true, invert_top: false, invert_bottom: false };
+    return { top_entity: '', bottom_entity: '', title: '', size: 'medium', compact_orientation:'vertical', show_status: true, show_position: false, show_buttons: false, open_popup: true, invert_top: false, invert_bottom: false };
   }
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
   }
   setConfig(config) {
-    if (!config.top_entity || !config.bottom_entity) throw new Error(this.t('entities_required'));
-    if(config.top_entity===config.bottom_entity)throw new Error(this.t('different_entities'));
+    this.setup=!config.top_entity || !config.bottom_entity;
+    if(config.top_entity && config.top_entity===config.bottom_entity)throw new Error(this.t('different_entities'));
     for(const key of ['invert_top','invert_bottom'])if(config[key]!==undefined && typeof config[key]!=='boolean')throw new Error(this.t('invalid_invert'));
     if (!['auto','compact','small','medium','large'].includes(config.size || 'medium')) throw new Error(this.t('invalid_size'));
+    if(config.compact_orientation && !['vertical','horizontal'].includes(config.compact_orientation))throw new Error(this.t('invalid_orientation'));
     this.closePopup();
     this.operation=(this.operation || 0)+1;this.busy=false;
     this.session?.cards.delete(this);
     this.clearFeedback();
     this.clearGestures();
     this.drag = null;
-    this.config = { ...config, size: config.size || 'medium', open_popup: config.open_popup ?? true, invert_top:config.invert_top ?? false,invert_bottom:config.invert_bottom ?? false };
+    this.config = {compact_orientation:'vertical', ...config, size: config.size || 'medium', open_popup: config.open_popup ?? true, invert_top:config.invert_top ?? false,invert_bottom:config.invert_bottom ?? false };
     this.key = JSON.stringify([config.top_entity,config.bottom_entity]);
     if (!plisseSessions.has(this.key)) plisseSessions.set(this.key,{targets:{},commands:{},cards:new Set(),error:''});
     this.session = plisseSessions.get(this.key);
@@ -267,6 +278,7 @@ class PlisseCard extends HTMLElement {
         .fabric-move{position:absolute;left:0;right:0;top:15px;bottom:15px;min-height:6px;border:0;padding:0;background:transparent;cursor:grab;touch-action:none;pointer-events:auto;z-index:3}
         .fabric-move:active{cursor:grabbing}.fabric-move:focus-visible{outline:2px solid white;outline-offset:-3px}
         .handle{position:absolute;left:0;width:100%;height:18px;transform:translateY(-50%);border:0;background:transparent;cursor:ns-resize;touch-action:none;padding:0;z-index:2}
+        .handle,.handle:after{cursor:ns-resize!important}
         .handle:after{content:'';display:block;width:50%;height:4px;margin:auto;background:#fff;border-radius:4px}
         .handle:focus-visible{outline:2px solid var(--plisse-color);outline-offset:-2px}
         .handle:disabled,.preset:disabled{opacity:.4;cursor:default}
@@ -280,9 +292,20 @@ class PlisseCard extends HTMLElement {
         .error{grid-column:1 / -1;color:var(--error-color,#db4437);background:color-mix(in srgb,var(--error-color,#db4437) 15%,transparent);border-radius:12px;padding:12px 16px;font-size:14px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-line}
         [hidden],.error:empty{display:none!important}
         ha-card[role="button"]{cursor:pointer}ha-card:focus-visible{outline:2px solid var(--plisse-color)}
-        :host([data-size="medium"]) ha-card.buttons{grid-template-columns:minmax(0,1fr) 58px;column-gap:8px}
+        :host([data-size="medium"]){min-width:66px;--track-min-width:38px}
+        :host([data-size="medium"]) .control{min-width:38px}
+        :host([data-size="medium"]) ha-card.buttons{grid-template-columns:minmax(0,1fr) minmax(38px,56px) 54px minmax(0,1fr);column-gap:0;min-width:112px}
+        :host([data-size="medium"][data-tight="true"]) ha-card{padding:8px;gap:8px}
+        :host([data-size="medium"][data-tight="true"]) ha-card.buttons{grid-template-columns:minmax(0,1fr) minmax(38px,56px) 36px minmax(0,1fr);column-gap:0;min-width:98px}
+        :host([data-size="medium"][data-tight="true"]) .presets{gap:6px;width:30px}
+        :host([data-size="medium"][data-tight="true"]) .presets .preset{width:30px;height:32px;font-size:11px}
+        .identity.hide-icon{grid-template-columns:minmax(0,1fr)}.identity.hide-icon .icon{display:none}.identity.hide-icon h2,.identity.hide-icon .summary{grid-column:1}
+        :host([data-size="compact"][data-inline="true"]) ha-card{grid-template-columns:minmax(0,1fr) clamp(132px,50%,256px);grid-template-rows:auto;align-items:center}
+        :host([data-size="compact"][data-inline="true"]) .compact-actions{grid-column:2;grid-row:1}
+        :host([data-size="compact"][data-inline="true"]) .compact-actions .preset{min-width:36px}
         :host([data-size="medium"]) .identity{grid-column:1 / -1}
-        :host([data-size="medium"]) .presets{grid-column:2;grid-row:2;flex-direction:column;align-items:center;justify-content:flex-start}
+        :host([data-size="medium"]) ha-card.buttons .control{grid-column:2;width:100%}
+        :host([data-size="medium"]) .presets{grid-column:3;grid-row:2;width:42px;justify-self:end;flex-direction:column-reverse;align-items:center;justify-content:flex-end}
         :host([data-size="medium"]) .preset{width:42px}
         :host([data-size="small"]){--track-width:38px;--track-min-width:24px;min-width:78px}
         :host([data-size="small"]) .control{min-width:24px}
@@ -293,7 +316,7 @@ class PlisseCard extends HTMLElement {
         :host([data-size="small"]) ha-card.buttons h2{max-height:calc(var(--track-height) - 148px);align-self:end}
         :host([data-size="small"]) .summary{grid-column:2;grid-row:1;justify-self:center;white-space:nowrap}
         :host([data-size="small"]) .control{grid-column:2}
-        :host([data-size="small"]) .presets{grid-column:1;grid-row:2;flex-direction:column;gap:6px;align-self:start}
+        :host([data-size="small"]) .presets{grid-column:1;grid-row:2;flex-direction:column-reverse;gap:6px;align-self:start}
         :host([data-size="small"]) .preset{width:24px;height:30px;font-size:10px}
         :host([data-size="small"]) .preset-label{transform:rotate(-90deg)}
         :host([data-size="small"]) .values{font-size:11px;gap:4px}
@@ -402,6 +425,15 @@ class PlisseCard extends HTMLElement {
       if(e.button!==0 || onHandle(e) || !this.ready() || this.busy || this.drag)return;
       const rect=track.getBoundingClientRect(),p=this.displayPositions();
       const y=e.clientY-rect.top,span=rect.height-36;
+      // Give fingers a larger edge target; overlapping zones use the nearest grip.
+      const touchSide=e.pointerType==='touch' ? this.touchGrip(y,rect.height,p) : null;
+      if(touchSide){
+        e.preventDefault();
+        const start=p[touchSide];this.clearFeedback();
+        this.drag={side:touchSide,id:e.pointerId,value:start,start,y:e.clientY};
+        this.shadowRoot.querySelector('.'+touchSide).setPointerCapture(e.pointerId);
+        this.render();return;
+      }
       const topY=(100-p.top)*span/100,bottomY=(100-p.bottom)*span/100+36;
       this.trackTap={id:e.pointerId,x:e.clientX,y:e.clientY,positions:p,
         fabric:p.top>=p.bottom && y>=topY && y<=bottomY};
@@ -431,6 +463,13 @@ class PlisseCard extends HTMLElement {
       const command=this.trackCommand(e.clientY-rect.top,rect.height);
       this.send(command.side,command.position);
     });
+  }
+  touchGrip(y,height,p) {
+    const span=Math.max(1,height-36);
+    const top=9+(100-p.top)*span/100;
+    const bottom=27+(100-p.bottom)*span/100;
+    const dt=Math.abs(y-top),db=Math.abs(y-bottom);
+    return Math.min(dt,db)<=32 ? (dt<=db ? 'top' : 'bottom') : null;
   }
   shiftPair(p,delta) {
     const shift=Math.max(-p.bottom,Math.min(100-p.top,delta));
@@ -501,6 +540,7 @@ class PlisseCard extends HTMLElement {
     });
   }
   async runAction(kind) {
+    if(this.setup)return;
     if(kind==='tap' && !this.inModal && this.hasError()){this.openPopup();return;}
     const action = this.config?.[kind + '_action'];
     if (!action) {
@@ -547,7 +587,7 @@ class PlisseCard extends HTMLElement {
   get error() { return this.session?.error || ''; }
   set error(value) { if (this.session) { this.session.error=value; plisseNotify(this.session); } }
   openPopup() {
-    if (this.dialog?.open || this.inModal || this.config.open_popup !== true && !this.hasError()) return;
+    if (this.setup || this.dialog?.open || this.inModal || this.config.open_popup !== true && !this.hasError()) return;
     const dialog = document.createElement('dialog');
     dialog.setAttribute('aria-label',this.cardTitle());
     const head = document.createElement('div'); head.className='dialog-head';
@@ -575,12 +615,25 @@ class PlisseCard extends HTMLElement {
     this.dialog.querySelector('.dialog-title').textContent=this.cardTitle();
     this.dialog.querySelector('.dialog-close').setAttribute('aria-label',this.t('dismiss'));
   }
+  movementIcon() {
+    const direction=side=>{
+      const state=this._hass?.states[this.entityId(side)];
+      if(!state || !['opening','closing'].includes(state.state))return 0;
+      const raw=state.state==='opening'?1:-1;
+      return this.config['invert_'+side]?-raw:raw;
+    };
+    const top=direction('top'),bottom=direction('bottom');
+    if(top===1 && bottom===-1)return 'mdi:arrow-expand-vertical';
+    if(top===-1 && bottom===1)return 'mdi:arrow-collapse-vertical';
+    if(top || bottom)return (top || bottom)>0?'mdi:arrow-up':'mdi:arrow-down';
+    return undefined;
+  }
   updateDialogIcon() {
     const icon=this.dialog?.querySelector('ha-state-icon');
     if(!icon)return;
     const entity=this._hass?.states[this.config.top_entity];
     icon.hass=this._hass;icon.stateObj=entity;
-    icon.icon=this.config.icon || entity?.attributes.icon || (entity ? undefined : 'mdi:blinds-horizontal');
+    icon.icon=this.movementIcon() || this.config.icon || entity?.attributes.icon || (entity ? undefined : 'mdi:blinds-horizontal');
   }
   closePopup() {
     const dialog=this.dialog;if(!dialog)return;
@@ -598,7 +651,7 @@ class PlisseCard extends HTMLElement {
   remember(side,value) {
     const id=this.config[side==='top'?'top_entity':'bottom_entity'];
     this.forget(id);
-    const t={value:this.convertPosition(side,value),created:Date.now(),moving:false,lastState:this._hass?.states[id]};
+    const t={value:this.convertPosition(side,value),created:Date.now(),moving:false,progress:false,lastPosition:this._hass?.states[id]?.attributes.current_position,lastState:this._hass?.states[id]};
     const session=this.session;
     t.timer=setTimeout(()=>{
       if(session.targets[id]!==t)return;
@@ -617,7 +670,7 @@ class PlisseCard extends HTMLElement {
   forget(id,expected) {
     const old=this.session?.targets[id];
     if(!old || (expected && old!==expected))return;
-    clearTimeout(old.timer);delete this.session.targets[id];
+    clearTimeout(old.timer);clearTimeout(old.stopTimer);delete this.session.targets[id];
   }
   reconcile() {
     if(!this.session || !this._hass)return;
@@ -625,17 +678,26 @@ class PlisseCard extends HTMLElement {
     for(const id of [this.config.top_entity,this.config.bottom_entity]){
       const t=this.session.targets[id],s=this._hass.states[id];if(!t)continue;
       if(s===t.lastState)continue;
+      if(s?.last_updated && t.lastState?.last_updated && s.last_updated<t.lastState.last_updated)continue;
       t.lastState=s;
-      const moving=['opening','closing'].includes(s?.state);
+      const moving=['opening','closing'].includes(s?.state),pos=s?.attributes.current_position;
+      if(typeof pos==='number' && typeof t.lastPosition==='number' && Math.abs(pos-t.value)<Math.abs(t.lastPosition-t.value))t.progress=true;
+      t.lastPosition=pos;
+      clearTimeout(t.stopTimer);t.stopTimer=null;
+      if(!s || ['unavailable','unknown'].includes(s.state) || (typeof pos==='number' && Math.abs(pos-t.value)<0.5 && !moving)){
+        this.forget(id,t);changed=true;continue;
+      }
       if(moving)t.moving=true;
-      const pos=s?.attributes.current_position;
-      if(!s || ['unavailable','unknown'].includes(s.state) ||
-        (typeof pos==='number' && Math.abs(pos-t.value)<0.5 && !moving) ||
-        (t.moving && !moving && Date.now()-t.created>1000)){
-        if(t.moving && !moving && typeof pos==='number' && Math.abs(pos-t.value)>0.5 && !['unavailable','unknown'].includes(s?.state)){
-          this.session.error={items:[...(this.session.error?.items || []).filter(i=>i.id!==id),{id,reason:'not_reached'}]};
-        }
-        this.forget(id,t);changed=true;
+      if(!moving && t.progress){
+        const session=this.session;
+        t.stopTimer=setTimeout(()=>{
+          if(session.targets[id]!==t || ['opening','closing'].includes(t.lastState?.state))return;
+          const latest=t.lastState?.attributes.current_position;
+          if(typeof latest!=='number' || Math.abs(latest-t.value)<0.5)return;
+          clearTimeout(t.timer);delete session.targets[id];
+          session.error={items:[...(session.error?.items || []).filter(i=>i.id!==id),{id,reason:'not_reached'}]};
+          plisseNotify(session);
+        },Math.max(5000,8000-(Date.now()-t.created)));
       }
     }
     if(changed)plisseNotify(this.session);
@@ -672,7 +734,21 @@ class PlisseCard extends HTMLElement {
     const available=this.inModal ? Math.max(140,Math.min(320,window.innerHeight-270)) : baseline;
     this._trackHeight=available;
     this.style.setProperty('--track-height',available+'px');
+    this.updateResponsiveLayout(width);
     this.render();
+  }
+  updateResponsiveLayout(width) {
+    const tight=width>0 && width<150;
+    this.setAttribute('data-tight',String(tight));
+    this.setAttribute('data-inline',String(this.activeSize==='compact' && this.config.compact_orientation==='horizontal' && width>=340));
+    const identity=this.shadowRoot.querySelector('.identity'),summary=this.shadowRoot.querySelector('.summary');
+    if(identity && summary && this.activeSize!=='small' && this.activeSize!=='large'){
+      // Measure with the icon reserved, so removing it cannot create a resize oscillation.
+      const available=Math.max(0,identity.getBoundingClientRect().width-44);
+      const canvas=this.measureCanvas || (this.measureCanvas=document.createElement('canvas'));
+      const ctx=canvas.getContext('2d');
+      if(ctx){ctx.font='12px Roboto, sans-serif';identity.classList.toggle('hide-icon',ctx.measureText(summary.textContent || '').width>available);}
+    }
   }
   trackHeight() { return this.shadowRoot?.querySelector('.window')?.getBoundingClientRect().height || this._trackHeight || 200; }
   t(key) { return plisseTranslate(this._hass,key); }
@@ -695,7 +771,7 @@ class PlisseCard extends HTMLElement {
   }
   set hass(value) { this._hass = value;
     const listing=window.customCards?.find(card=>card.type==='dual-cover-card');
-    if(listing){listing.name='Top Down Bottom Up Card';listing.description=this.t('description');} this.updateDialogIcon(); this.updateDialogText(); this.reconcile(); if(this.modalCard)this.modalCard.hass=value; this.render(); }
+    if(listing){listing.name='Dual Cover Card';listing.description=this.t('description');} this.updateDialogIcon(); this.updateDialogText(); this.reconcile(); if(this.modalCard)this.modalCard.hass=value; this.render(); }
   coverProblem(side) {
     const state=this._hass?.states[this.entityId(side)];
     if(!state)return 'entity_missing';
@@ -705,10 +781,12 @@ class PlisseCard extends HTMLElement {
     return '';
   }
   positions() {
+    if(this.setup)return {top:75,bottom:25};
     const get=side=>this.coverProblem(side) ? null : this.convertPosition(side,this._hass.states[this.entityId(side)].attributes.current_position);
     return {top:get('top'),bottom:get('bottom')};
   }
   errorText() {
+    if(this.setup)return '';
     const error=this.error;
     const lines=[];
     if(typeof error==='string' && error)lines.push(this.t(error));
@@ -763,6 +841,7 @@ class PlisseCard extends HTMLElement {
     plisseNotify(session);
   }
   ready() {
+    if(this.setup)return false;
     if (!this.config) return false;
     const p = this.positions();
     return p.top !== null && p.bottom !== null && p.top >= 0 && p.bottom <= 100 && p.top <= 100 && p.bottom >= 0;
@@ -772,6 +851,7 @@ class PlisseCard extends HTMLElement {
     return side==='top' ? Math.max(boundary ?? 0,Math.min(100,value)) : Math.max(0,Math.min(boundary ?? 100,value));
   }
   async stopCovers() {
+    if(this.setup)return;
     for(const card of this.session.cards){card.clearFeedback();card.clearGestures();card.drag=null;}
     this.error = '';
     this.forget(this.config.top_entity);this.forget(this.config.bottom_entity);plisseNotify(this.session);
@@ -831,7 +911,7 @@ class PlisseCard extends HTMLElement {
     icon.hass = this._hass;
     icon.stateObj = entity;
     // Let HA resolve device-class/state icons when the entity has no custom icon.
-    icon.icon = this.config.icon || entity?.attributes.icon || (entity ? undefined : 'mdi:blinds-horizontal');
+    icon.icon = this.movementIcon() || this.config.icon || entity?.attributes.icon || (entity ? undefined : 'mdi:blinds-horizontal');
     const p = this.displayPositions(), valid = this.ready();
     this.shadowRoot.querySelector('h2').textContent=this.cardTitle();
     for(const [selector,key] of [['.top','top_edge'],['.bottom','bottom_edge'],['.fabric-move','move'],['.stop','stop'],['.compact-open','open'],['.compact-stop','stop'],['.compact-close','close']]){
@@ -839,6 +919,8 @@ class PlisseCard extends HTMLElement {
     }
     for(const button of this.shadowRoot.querySelectorAll('[data-coverage]'))button.setAttribute('aria-label',button.dataset.coverage+'% '+this.t('covered'));
     this.shadowRoot.querySelector('.compact-actions').hidden=this.activeSize!=='compact';
+    this.shadowRoot.querySelector('.compact-stop').disabled=!!this.setup;
+    this.shadowRoot.querySelector('.stop').disabled=!!this.setup;
     this.shadowRoot.querySelector('.compact-open').disabled=!valid || !!this.busy;
     this.shadowRoot.querySelector('.compact-close').disabled=!valid || !!this.busy;
     this.shadowRoot.querySelector('.fabric-move').disabled=!valid || !!this.busy;
@@ -873,7 +955,7 @@ class PlisseCard extends HTMLElement {
       tooltip.style.top = Math.max(24,Math.min(window.innerHeight-24,rect.top+(this.drag.side === 'both' ? (visualTop+visualBottom)/2 : this.drag.side === 'top' ? visualTop : visualBottom)))+'px';
     }
     this.shadowRoot.querySelector('.values').hidden = this.config.show_position !== true;
-    fabric.style.opacity = valid ? '1' : '.25';
+    fabric.style.opacity = valid || this.setup ? '1' : '.25';
     for (const side of ['top','bottom']) {
       const el = this.shadowRoot.querySelector('.' + side);
       el.style.top = (side === 'top' ? visualTop : visualBottom) + 'px';
@@ -887,8 +969,9 @@ class PlisseCard extends HTMLElement {
     this.shadowRoot.querySelector('.bv').textContent = p.bottom === null ? '—' : p.bottom + '%';
     const hasError=this.hasError();
     this.shadowRoot.querySelector('.summary').hidden = !hasError && !this.inModal && this.config.show_status === false;
-    this.shadowRoot.querySelector('.summary').textContent = hasError ? this.t('error_status') : this.status(top, bottom, valid);
+    this.shadowRoot.querySelector('.summary').textContent = this.setup ? this.t('select_covers') : hasError ? this.t('error_status') : this.status(top, bottom, valid);
     this.updateInteractionState();
+    this.updateResponsiveLayout(this.getBoundingClientRect().width);
     const labels = this.shadowRoot.querySelectorAll('.values span');
     const words = this.words();
     labels[0].textContent = words[1]; labels[1].textContent = words[2];
@@ -904,16 +987,23 @@ class PlisseCardEditor extends HTMLElement {
   constructor() {
     super();this.attachShadow({mode:'open'});
     const style=document.createElement('style');
-    style.textContent='ha-expansion-panel{display:block;margin-top:24px;--expansion-panel-content-padding:0;border-radius:var(--ha-border-radius-md,12px)}.content{padding:12px;display:grid;gap:16px}.tap-warning{color:var(--error-color,#db4437);margin:0;font-size:14px;line-height:1.5}[hidden]{display:none!important}ha-icon{color:var(--secondary-text-color)}';
+    style.textContent='.controls-form{display:block;margin-top:24px} .layout-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(66px,1fr));gap:8px;padding:12px}.layout-choice{min-width:0;padding:6px;border:1px solid var(--divider-color);border-radius:8px;background:transparent;color:var(--primary-text-color);cursor:pointer}.layout-choice[aria-pressed=true]{border:2px solid var(--primary-color)}.layout-choice img{display:block;width:100%;max-height:76px;object-fit:contain}.layout-choice span{display:block;font-size:12px;margin-top:4px}.orientation{display:block;padding:0 12px 12px} ha-expansion-panel{display:block;margin-top:24px;--expansion-panel-content-padding:0;border-radius:var(--ha-border-radius-md,12px)}.content{padding:12px;display:grid;gap:16px}.tap-warning{color:var(--error-color,#db4437);margin:0;font-size:14px;line-height:1.5}[hidden]{display:none!important}ha-icon{color:var(--secondary-text-color)}';
     this.form=document.createElement('ha-form');
+    this.layoutPanel=document.createElement('ha-expansion-panel');this.layoutPanel.setAttribute('outlined','');
+    const layoutIcon=document.createElement('ha-icon');layoutIcon.setAttribute('slot','leading-icon');layoutIcon.icon='mdi:view-dashboard';
+    this.layoutTitle=document.createElement('div');this.layoutTitle.setAttribute('slot','header');
+    this.layoutGrid=document.createElement('div');this.layoutGrid.className='layout-grid';
+    this.orientationForm=document.createElement('ha-form');this.orientationForm.className='orientation';
+    this.layoutPanel.append(layoutIcon,this.layoutTitle,this.layoutGrid,this.orientationForm);
+    this.controlsForm=document.createElement('ha-form');this.controlsForm.className='controls-form';
     this.tapForm=document.createElement('ha-form');this.otherActionsForm=document.createElement('ha-form');
     this.warning=document.createElement('p');this.warning.className='tap-warning';this.warning.setAttribute('role','status');
     this.panel=document.createElement('ha-expansion-panel');this.panel.setAttribute('outlined','');
     const icon=document.createElement('ha-icon');icon.setAttribute('slot','leading-icon');icon.icon='mdi:gesture-tap';
     this.panelTitle=document.createElement('div');this.panelTitle.setAttribute('slot','header');this.panelTitle.setAttribute('role','heading');this.panelTitle.setAttribute('aria-level','3');
     const content=document.createElement('div');content.className='content';content.append(this.tapForm,this.warning,this.otherActionsForm);
-    this.panel.append(icon,this.panelTitle,content);this.shadowRoot.append(style,this.form,this.panel);
-    for(const form of [this.form,this.tapForm,this.otherActionsForm])form.addEventListener('value-changed',e=>{
+    this.panel.append(icon,this.panelTitle,content);this.shadowRoot.append(style,this.form,this.layoutPanel,this.controlsForm,this.panel);
+    for(const form of [this.form,this.controlsForm,this.orientationForm,this.tapForm,this.otherActionsForm])form.addEventListener('value-changed',e=>{
       e.stopPropagation();this.config={...this.config,...e.detail.value};this.render();
       this.dispatchEvent(new CustomEvent('config-changed',{detail:{config:this.config},bubbles:true,composed:true}));
     });
@@ -925,10 +1015,24 @@ class PlisseCardEditor extends HTMLElement {
     const lang=plisseLanguage(this._hass);
     if(this.lang!==lang){this.lang=lang;this.spec=PlisseCard.configForm(this._hass);}
     const actions=this.spec.schema.find(f=>f.name==='interactions').schema;
-    const data={size:'medium',open_popup:true,show_status:true,show_position:false,show_buttons:false,invert_top:false,invert_bottom:false,...this.config,title:this.config.title ?? ''};
-    for(const [form,schema] of [[this.form,this.spec.schema.filter(f=>f.name!=='interactions')],[this.tapForm,actions.slice(0,1)],[this.otherActionsForm,actions.slice(1)]]){
+    const data={compact_orientation:'vertical',size:'medium',open_popup:true,show_status:true,show_position:false,show_buttons:false,invert_top:false,invert_bottom:false,...this.config,title:this.config.title ?? ''};
+    for(const [form,schema] of [[this.form,this.spec.schema.slice(0,4)],[this.controlsForm,[this.spec.schema.find(f=>f.name==='controls')]],[this.orientationForm,[{name:'compact_orientation',selector:{select:{options:[{value:'vertical',label:plisseTranslate(this._hass,'vertical')},{value:'horizontal',label:plisseTranslate(this._hass,'horizontal')}]}}}]],[this.tapForm,actions.slice(0,1)],[this.otherActionsForm,actions.slice(1)]]){
       form.hass=this._hass;form.schema=schema;form.computeLabel=this.spec.computeLabel;form.computeHelper=this.spec.computeHelper;form.data=data;
     }
+    this.layoutTitle.textContent=plisseTranslate(this._hass,'arrangement');
+    this.orientationForm.hidden=data.size!=='compact';
+    if(!this.layoutButtons){
+      this.layoutButtons=[];
+      const options=this.spec.schema.find(f=>f.name==='arrangement').schema[0].selector.select.options;
+      for(const option of options){
+        const button=document.createElement('button');button.type='button';button.className='layout-choice';
+        const image=document.createElement('img');image.src=option.image.src;image.alt='';
+        const label=document.createElement('span');label.textContent=option.label;button.append(image,label);
+        button.addEventListener('click',()=>{this.config={...this.config,size:option.value};this.render();this.dispatchEvent(new CustomEvent('config-changed',{detail:{config:this.config},bubbles:true,composed:true}));});
+        this.layoutGrid.append(button);this.layoutButtons.push({button,value:option.value});
+      }
+    }
+    for(const {button,value} of this.layoutButtons)button.setAttribute('aria-pressed',String(value===data.size));
     this.panelTitle.textContent=plisseTranslate(this._hass,'interactions');
     this.warning.textContent=plisseTranslate(this._hass,'tap_warning');
     this.warning.hidden=!(data.open_popup===true && !!data.tap_action?.action);
@@ -939,4 +1043,4 @@ if (!customElements.get('dual-cover-card')) customElements.define('dual-cover-ca
 // Existing dashboards can retain their old card type after switching resources.
 if (!customElements.get('plisse-card')) customElements.define('plisse-card', class extends PlisseCard {});
 window.customCards = window.customCards || [];
-window.customCards.push({type:'dual-cover-card',name:'Top Down Bottom Up Card',description:'Dual-cover honeycomb shades / Plisségordijn met twee covers.'});
+window.customCards.push({type:'dual-cover-card',name:'Dual Cover Card',description:'Top-down/bottom-up controls for blinds and shades with two covers.',preview:true,documentationURL:'https://github.com/KevinConsen/dual-cover-card',getEntitySuggestion:(hass,entityId)=>entityId.startsWith('cover.') ? {config:{type:'custom:dual-cover-card',...PlisseCard.getStubConfig(),top_entity:entityId}} : null});
