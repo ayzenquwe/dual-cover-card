@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+- Tolerate one percentage point of reported rail overlap caused by rounded motor positions, including inverted covers.
+- Accept target arrival within one percentage point during reconciliation, stopped-short checks and the motion timeout.
+- Keep outgoing command boundaries strict and add simulated regression tests for tolerance and genuine errors.
+
 ## 0.2.2
 
 - Enlarge touch targets around both slider grips without changing their appearance.

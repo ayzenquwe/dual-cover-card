@@ -1,6 +1,8 @@
 # Dual Cover Card
 
-A Home Assistant dashboard card for top-down/bottom-up blinds and honeycomb shades with independently controlled top and bottom edges. Built by [kevinconsen](https://github.com/KevinConsen).
+A Home Assistant dashboard card for top-down/bottom-up blinds and honeycomb shades with independently controlled top and bottom edges. Originally built by [kevinconsen](https://github.com/KevinConsen).
+
+This [fork](https://github.com/ayzenquwe/dual-cover-card) adds a one-percentage-point tolerance for rounded motor position reports and target arrival. It preserves the upstream card types and configuration. [Upstream repository](https://github.com/KevinConsen/dual-cover-card).
 
 - Shows the covered part of the window between two draggable edges.
 - Drag the middle to move both covers while keeping the same coverage.
@@ -16,10 +18,18 @@ Two different `cover` entities that report `current_position` and support `cover
 
 The card is a frontend control. It does not provide a hardware interlock or synchronize the physical speeds of your covers.
 
-## Install with HACS
+## Install with Marketplace (Home Assistant 2026.11+)
+
+1. Open **Settings → Marketplace** and add `https://github.com/ayzenquwe/dual-cover-card` as a custom **Dashboard** repository.
+2. Find **Dual Cover Card** and download it. Marketplace registers its dashboard resource automatically under `/local/community/dual-cover-card/dual-cover-card.js`.
+3. Reload your browser and add **Dual Cover Card** to your dashboard.
+
+When switching from upstream, replace its installation with this fork. **Do not load upstream and fork resources together**: they register the same card types. Existing dashboard card configurations remain compatible.
+
+## Install with HACS (older installations)
 
 1. Open HACS, open its menu and select **Custom repositories**.
-2. Add `https://github.com/KevinConsen/dual-cover-card` with type **Dashboard**.
+2. Add `https://github.com/ayzenquwe/dual-cover-card` with type **Dashboard**.
 3. Find **Dual Cover Card** and download it.
 4. Reload your browser. If HACS has not added a dashboard resource automatically, add `/hacsfiles/dual-cover-card/dual-cover-card.js` as a **JavaScript module** under dashboard resources.
 5. Add **Dual Cover Card** to your dashboard and choose the two covers.
@@ -89,6 +99,8 @@ Commands are sent on release. The selected position remains visible for 800ms be
 
 ## Error handling
 
+Reported rail overlap of up to one percentage point is tolerated, as is target arrival within one percentage point. Larger discrepancies still produce errors. Outgoing commands keep strict rail boundaries: the card never intentionally requests crossed rail positions.
+
 An error changes the card status to **Error**. Tap the card for details, even if the popup is normally disabled. The popup identifies missing/unavailable entities, invalid positions and failed commands per cover.
 
 If Home Assistant does not acknowledge a command within 15 seconds, the UI becomes available again and shows a warning. The command might still execute; the card never retries automatically. A known target expires after two minutes and may generate a warning if arrival was not confirmed.
@@ -115,7 +127,7 @@ Requires Node.js. No dependency installation is needed.
 
 ```sh
 node --check dual-cover-card.js
-node tests/regression.cjs
+node tests/position-tolerance.cjs
 ```
 
 The tests use a simulated DOM and Home Assistant state; they do not replace visual or hardware testing.

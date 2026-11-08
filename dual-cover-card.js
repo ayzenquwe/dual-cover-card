@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 0.2.2. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.4. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
@@ -183,6 +183,9 @@ const plisseText = {
 function plisseLanguage(hass) { return (hass?.locale?.language || hass?.language || "en").toLowerCase().split(/[-_]/)[0] === "nl" ? "nl" : "en"; }
 function plisseTranslate(hass,key) { return plisseText[plisseLanguage(hass)][key] || key; }
 const plisseSessions = new Map();
+// Whole-percentage motor reports can differ by one point at a meeting edge
+// or after arriving. This tolerates reports only; command limits stay strict.
+const PLISSE_POSITION_TOLERANCE = 1;
 function plisseNotify(session) {
   for (const card of session.cards) card.render();
 }
@@ -658,7 +661,7 @@ class PlisseCard extends HTMLElement {
       delete session.targets[id];
       const live=[...session.cards].find(c=>c._hass);
       const reported=live?._hass.states[id];
-      if(live && (typeof reported?.attributes.current_position!=='number' || Math.abs(reported.attributes.current_position-t.value)>0.5)){
+      if(live && (typeof reported?.attributes.current_position!=='number' || Math.abs(reported.attributes.current_position-t.value)>PLISSE_POSITION_TOLERANCE)){
         const items=session.error?.items || [];
         session.error={items:[...items.filter(i=>i.id!==id),{id,reason:'motion_timeout'}]};
       }
@@ -684,7 +687,7 @@ class PlisseCard extends HTMLElement {
       if(typeof pos==='number' && typeof t.lastPosition==='number' && Math.abs(pos-t.value)<Math.abs(t.lastPosition-t.value))t.progress=true;
       t.lastPosition=pos;
       clearTimeout(t.stopTimer);t.stopTimer=null;
-      if(!s || ['unavailable','unknown'].includes(s.state) || (typeof pos==='number' && Math.abs(pos-t.value)<0.5 && !moving)){
+      if(!s || ['unavailable','unknown'].includes(s.state) || (typeof pos==='number' && Math.abs(pos-t.value)<=PLISSE_POSITION_TOLERANCE && !moving)){
         this.forget(id,t);changed=true;continue;
       }
       if(moving)t.moving=true;
@@ -693,7 +696,7 @@ class PlisseCard extends HTMLElement {
         t.stopTimer=setTimeout(()=>{
           if(session.targets[id]!==t || ['opening','closing'].includes(t.lastState?.state))return;
           const latest=t.lastState?.attributes.current_position;
-          if(typeof latest!=='number' || Math.abs(latest-t.value)<0.5)return;
+          if(typeof latest!=='number' || Math.abs(latest-t.value)<=PLISSE_POSITION_TOLERANCE)return;
           clearTimeout(t.timer);delete session.targets[id];
           session.error={items:[...(session.error?.items || []).filter(i=>i.id!==id),{id,reason:'not_reached'}]};
           plisseNotify(session);
@@ -803,7 +806,7 @@ class PlisseCard extends HTMLElement {
       if(issue){const id=this.entityId(side),name=this._hass?.states[id]?.attributes.friendly_name || id;lines.push(this.t(side+'_entity')+' ('+name+'): '+this.t(issue));}
     }
     const p=this.positions();
-    if(this.ready() && p.top<p.bottom)lines.push(this.t('overlap'));
+    if(this.ready() && p.bottom-p.top>PLISSE_POSITION_TOLERANCE)lines.push(this.t('overlap'));
     return [...new Set(lines)].join('\n');
   }
   async callCover(hass,service,data) {
@@ -1043,4 +1046,4 @@ if (!customElements.get('dual-cover-card')) customElements.define('dual-cover-ca
 // Existing dashboards can retain their old card type after switching resources.
 if (!customElements.get('plisse-card')) customElements.define('plisse-card', class extends PlisseCard {});
 window.customCards = window.customCards || [];
-window.customCards.push({type:'dual-cover-card',name:'Dual Cover Card',description:'Top-down/bottom-up controls for blinds and shades with two covers.',preview:true,documentationURL:'https://github.com/KevinConsen/dual-cover-card',getEntitySuggestion:(hass,entityId)=>entityId.startsWith('cover.') ? {config:{type:'custom:dual-cover-card',...PlisseCard.getStubConfig(),top_entity:entityId}} : null});
+window.customCards.push({type:'dual-cover-card',name:'Dual Cover Card',description:'Top-down/bottom-up controls for blinds and shades with two covers.',preview:true,documentationURL:'https://github.com/ayzenquwe/dual-cover-card',getEntitySuggestion:(hass,entityId)=>entityId.startsWith('cover.') ? {config:{type:'custom:dual-cover-card',...PlisseCard.getStubConfig(),top_entity:entityId}} : null});
