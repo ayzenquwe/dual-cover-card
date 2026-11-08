@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+
+- Recompute edge-drag previews from the gesture's starting positions, so reversing a push restores the other rail toward its original position before release.
+- Send only the final changed targets; preserve earlier committed targets and unchanged rail timers.
+- Cover reversible pushes in both directions, restored pending rails and consecutive gestures with event-level regressions.
+
 ## 0.2.6
 
 - Push a blocking rail along when dragging an edge beyond it, retaining the pushed position when the drag reverses.

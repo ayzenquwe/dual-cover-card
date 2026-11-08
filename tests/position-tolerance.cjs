@@ -297,27 +297,61 @@ function gestureFixture(top=50,bottom=0,invertTop=false) {
   return {...result,calls,topHandle:elements['.top'],bottomHandle:elements['.bottom'],track:elements['.window']};
 }
 function assertPair(p,top,bottom) {assert.equal(p.top,top);assert.equal(p.bottom,bottom);}
-test('Bottom pointer drag pushes top and retains the push on reversal until release',async()=>{
+test('Bottom pointer drag reverses a push back to the top rail origin before release',async()=>{
   const {card,calls,bottomHandle}=gestureFixture();
   bottomHandle.emit('pointerdown');
   bottomHandle.emit('pointermove',{clientY:25});
   assertPair(card.drag.positions,75,75);assert.equal(calls.length,0);
-  bottomHandle.emit('pointermove',{clientY:75});
-  assertPair(card.drag.positions,75,25);assert.equal(calls.length,0);
+  bottomHandle.emit('pointermove',{clientY:40});
+  assertPair(card.drag.positions,60,60);assert.equal(calls.length,0);
+  bottomHandle.emit('pointermove',{clientY:70});
+  assertPair(card.drag.positions,50,30);assert.equal(calls.length,0);
   await bottomHandle.emit('pointerup');
-  assertPair(card.displayPositions(),75,25);
-  assert.equal(calls.length,2);assert.equal(calls[0].entity_id,'cover.top');
-  assert.equal(calls[0].position,75);assert.equal(calls[1].position,25);
+  assertPair(card.displayPositions(),50,30);
+  assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.bottom');
+  assert.equal(calls[0].position,30);
 });
-test('Top pointer drag pushes bottom and retains its lowest position on reversal',async()=>{
+test('Top pointer drag reverses a push back to the bottom rail origin before release',async()=>{
   const {card,calls,topHandle}=gestureFixture(100,50);
   topHandle.emit('pointerdown');topHandle.emit('pointermove',{clientY:175});
   assertPair(card.drag.positions,25,25);
-  topHandle.emit('pointermove',{clientY:125});assertPair(card.drag.positions,75,25);
+  topHandle.emit('pointermove',{clientY:160});assertPair(card.drag.positions,40,40);
+  topHandle.emit('pointermove',{clientY:125});assertPair(card.drag.positions,75,50);
   assert.equal(calls.length,0);await topHandle.emit('pointerup');
-  assertPair(card.displayPositions(),75,25);
-  assert.equal(calls[0].entity_id,'cover.bottom');assert.equal(calls[0].position,25);
-  assert.equal(calls[1].entity_id,'cover.top');assert.equal(calls[1].position,75);
+  assertPair(card.displayPositions(),75,50);
+  assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.top');assert.equal(calls[0].position,75);
+});
+test('Returning a pushed drag to its start sends no commands',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture();
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
+  assertPair(card.drag.positions,80,80);
+  bottomHandle.emit('pointermove',{clientY:100});assertPair(card.drag.positions,50,0);
+  await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,0);assertPair(card.displayPositions(),50,0);
+});
+test('Reversing a push preserves a restored pending rail and its original deadline',async()=>{
+  const {card,calls,advance,bottomHandle}=gestureFixture();card.remember('top',60);
+  const existing=card.session.targets['cover.top'];advance(20000);
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
+  assertPair(card.drag.positions,80,80);
+  bottomHandle.emit('pointermove',{clientY:70});assertPair(card.drag.positions,60,30);
+  await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.bottom');
+  assert.equal(card.session.targets['cover.top'],existing);
+  advance(10000);assert.equal(card.session.targets['cover.top'],undefined);
+  assert.ok(card.session.targets['cover.bottom']);
+});
+test('A new gesture restores to previously committed targets rather than older reports',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture();
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
+  await bottomHandle.emit('pointerup');assertPair(card.displayPositions(),80,80);
+  const committedTop=card.session.targets['cover.top'];
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:80});
+  assertPair(card.drag.positions,100,100);
+  bottomHandle.emit('pointermove',{clientY:140});assertPair(card.drag.positions,80,40);
+  await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,3);assert.equal(calls[2].entity_id,'cover.bottom');assert.equal(calls[2].position,40);
+  assert.equal(card.session.targets['cover.top'],committedTop);assertPair(card.displayPositions(),80,40);
 });
 test('Pushing bottom all the way up requests both rails at100 within bounds',async()=>{
   const {card,calls,bottomHandle}=gestureFixture();

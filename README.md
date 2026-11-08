@@ -89,7 +89,7 @@ The 50%, 75% and 100% presets refer to **window coverage**, not entity position.
 
 ### Dragging and keyboard controls
 
-- Drag either white grip to move its edge. When it reaches the other rail, it pushes that rail along. Reversing the drag leaves the pushed rail at its furthest position while the dragged rail moves away.
+- Drag either white grip to move its edge. When it reaches the other rail, it pushes that rail along. Reversing within the same drag brings the pushed rail back toward its starting position, allowing an accidental push to be undone before release.
 - Drag from the colored middle to shift both edges equally, bounded by the window ends.
 - Tap the upper half of the fabric or the uncovered area above it to move the top edge; tap the lower half or uncovered area below it to move the bottom edge.
 - Focus an edge and use arrow keys (1%), Page Up/Down (10%) or Home/End. Keyboard moves also push a blocking rail.

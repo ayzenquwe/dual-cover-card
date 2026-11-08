@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 0.2.6. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.7. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
@@ -426,13 +426,13 @@ class PlisseCard extends HTMLElement {
   }
   beginEdgeDrag(side,id,y) {
     const positions=this.displayPositions(),start=positions[side];
-    this.drag={side,id,y,start,moved:false,positions:this.edgePositions(side,start,positions)};
+    this.drag={side,id,y,start,moved:false,originalPositions:positions,positions:this.edgePositions(side,start,positions)};
   }
   moveEdgeDrag(value) {
     if(!this.drag || this.drag.side==='both')return;
-    // Feed the previous preview back in: a pushed rail stays at its furthest
-    // position if the dragged rail reverses direction before release.
-    this.drag.positions=this.edgePositions(this.drag.side,value,this.drag.positions);
+    // Recompute from the gesture's starting targets so an accidental push can
+    // be undone before release, without moving the other rail past its origin.
+    this.drag.positions=this.edgePositions(this.drag.side,value,this.drag.originalPositions);
     this.drag.moved ||= this.drag.positions[this.drag.side]!==this.drag.start;
   }
   edgePositions(side,value,positions=this.displayPositions()) {
