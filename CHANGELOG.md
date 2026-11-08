@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8
+
+- Use a single two-minute movement timeout instead of the 30-second inactivity deadline, allowing long movements with sparse reports.
+- Clear a rail's movement-timeout error if a later stopped report confirms arrival, preserving unrelated errors.
+- Cover sparse 62/67-second movements, timeout boundaries and late-arrival recovery in regression tests.
+
 ## 0.2.7
 
 - Recompute edge-drag previews from the gesture's starting positions, so reversing a push restores the other rail toward its original position before release.

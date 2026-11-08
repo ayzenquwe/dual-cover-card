@@ -105,7 +105,7 @@ An error changes the card status to **Error**. Tap the card for details, even if
 
 If Home Assistant does not acknowledge a command within 15 seconds, the UI becomes available again and shows a warning. The command might still execute; the card never retries automatically. An acknowledgement timeout retains the pending target because execution is uncertain; an explicit command rejection removes it.
 
-A pending target expires with an error after **30 seconds without a position or movement-state change**, or after **two minutes overall**. Relevant changes restart only the 30-second deadline; unrelated attributes and duplicate unchanged values do not. Stop clears both pending targets. Unavailable or unknown positions return the display to the reported availability state.
+A pending target expires with an error **two minutes after its command**, allowing long movements with sparse position reports. Reports do not extend this deadline. If the rail subsequently reports a stopped position within one percentage point of that target, its movement-timeout error clears automatically. Other command errors remain visible. Stop clears both pending targets. Unavailable or unknown positions return the display to the reported availability state.
 
 Known targets are used when positioning or pushing another edge while a cover is moving. Commands from other apps or browser sessions are not known as targets. Reported movement and arrival depend on the cover integration.
 

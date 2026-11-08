@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 0.2.7. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.8. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
@@ -94,7 +94,6 @@ const plisseText = {
     "ack_timeout": "Na 15 seconden is geen bevestiging ontvangen. De opdracht kan nog worden uitgevoerd; controleer de cover voordat je opnieuw probeert.",
     "motion_timeout": "De doelpositie is na twee minuten niet bevestigd. Controleer de cover.",
     "target_pending": "Doel",
-    "not_reached": "De doelpositie is niet bereikt en er zijn 30 seconden geen positie- of bewegingswijzigingen ontvangen.",
     "request_accepted": "De opdracht voor de andere cover is wel bevestigd; dit betekent niet dat die al op de doelpositie staat.",
     "command_issues": "Niet alle opdrachten konden worden bevestigd.",
     "compact_orientation": "Compacte indeling",
@@ -172,7 +171,6 @@ const plisseText = {
     "ack_timeout": "No acknowledgement was received within 15 seconds. The command may still execute; check the cover before trying again.",
     "motion_timeout": "The target position was not confirmed within two minutes. Check the cover.",
     "target_pending": "Target",
-    "not_reached": "The target was not reached and no position or movement changes were received for 30 seconds.",
     "request_accepted": "The command for the other cover was acknowledged; this does not mean it has reached its target yet.",
     "command_issues": "Not all commands could be confirmed.",
     "compact_orientation": "Compact orientation",
@@ -188,7 +186,6 @@ const plisseSessions = new Map();
 // Whole-percentage motor reports can differ by one point at a meeting edge
 // or after arriving. This tolerates reports only; command limits stay strict.
 const PLISSE_POSITION_TOLERANCE = 1;
-const PLISSE_INACTIVITY_TIMEOUT = 30000;
 const PLISSE_MOTION_TIMEOUT = 120000;
 function plisseNotify(session) {
   for (const card of session.cards) card.render();
@@ -680,7 +677,7 @@ class PlisseCard extends HTMLElement {
     this.forget(id);
     const t={value:this.convertPosition(side,value),created:Date.now(),lastState:this._hass?.states[id]};
     const session=this.session;
-    const expire=reason=>{
+    const expire=()=>{
       if(session.targets[id]!==t)return;
       // A dashboard and its popup share targets, but may receive HA updates in
       // different order. Use the newest known report when the timer fires.
@@ -692,13 +689,11 @@ class PlisseCard extends HTMLElement {
       this.forget(id,t,session);
       if(!this.arrived(state,t)){
         const items=session.error?.items || [];
-        session.error={items:[...items.filter(i=>i.id!==id),{id,reason}]};
+        session.error={items:[...items.filter(i=>i.id!==id),{id,reason:'motion_timeout',target:t.value,lastUpdated:state?.last_updated}]};
       }
       plisseNotify(session);
     };
-    t.expire=expire;
-    t.timer=setTimeout(()=>expire('motion_timeout'),PLISSE_MOTION_TIMEOUT);
-    t.idleTimer=setTimeout(()=>expire('not_reached'),PLISSE_INACTIVITY_TIMEOUT);
+    t.timer=setTimeout(expire,PLISSE_MOTION_TIMEOUT);
     session.targets[id]=t;
     if(notify)plisseNotify(session);
     return t;
@@ -706,7 +701,7 @@ class PlisseCard extends HTMLElement {
   forget(id,expected,session=this.session) {
     const old=session?.targets[id];
     if(!old || (expected && old!==expected))return;
-    clearTimeout(old.timer);clearTimeout(old.idleTimer);delete session.targets[id];
+    clearTimeout(old.timer);delete session.targets[id];
   }
   reconcile() {
     if(!this.session || !this._hass)return;
@@ -715,16 +710,24 @@ class PlisseCard extends HTMLElement {
       const t=this.session.targets[id],s=this._hass.states[id];if(!t)continue;
       if(s===t.lastState)continue;
       if(s?.last_updated && t.lastState?.last_updated && s.last_updated<t.lastState.last_updated)continue;
-      const previous=t.lastState;
       t.lastState=s;
       if(!s || ['unavailable','unknown'].includes(s.state) || typeof s.attributes.current_position!=='number' || this.arrived(s,t)){
         this.forget(id,t);changed=true;continue;
       }
-      // Entity objects can also change for unrelated attributes. Only position
-      // or movement changes extend the inactivity deadline, never the hard cap.
-      if(s.state!==previous?.state || s.attributes.current_position!==previous?.attributes.current_position){
-        clearTimeout(t.idleTimer);
-        t.idleTimer=setTimeout(()=>t.expire('not_reached'),PLISSE_INACTIVITY_TIMEOUT);
+    }
+    // Retain only timeout target metadata after expiry, so a late arrival can
+    // clear that rail's warning without projecting a target indefinitely.
+    const error=this.session.error;
+    if(error?.items){
+      const items=error.items.filter(item=>{
+        if(item.reason!=='motion_timeout' || typeof item.target!=='number' || ![this.config.top_entity,this.config.bottom_entity].includes(item.id))return true;
+        const state=this._hass.states[item.id];
+        if(state?.last_updated && item.lastUpdated && state.last_updated<item.lastUpdated)return true;
+        return !this.arrived(state,{value:item.target});
+      });
+      if(items.length!==error.items.length){
+        this.session.error=items.length?{...error,items}:'';
+        changed=true;
       }
     }
     if(changed)plisseNotify(this.session);
@@ -905,7 +908,7 @@ class PlisseCard extends HTMLElement {
     const current=this.displayPositions();
     const order=firstSide==='bottom'?['bottom','top']:['top','bottom'];
     const commands=order.filter(side=>positions[side]!==current[side]).map(side=>({side,position:positions[side]}));
-    // Do not restart an unchanged pending rail's command or inactivity timer.
+    // Do not restart an unchanged pending rail's command or movement timer.
     if(!commands.length){this.render();return;}
     this.busy=true;this.session.error='';
     // Publish all changed targets atomically, before notifying shared views.

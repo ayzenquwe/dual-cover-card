@@ -92,14 +92,14 @@ test('Timeout accepts a report within one point even without an intermediate upd
 });
 test('A genuine stopped-short report still fails', () => {
   const { card, update, advance } = fixture(20, 0);
-  card.remember('top', 50); update('top', 48); card.reconcile(); advance(30000);
-  assert.equal(card.session.error.items[0].reason, 'not_reached');
+  card.remember('top', 50); update('top', 48); card.reconcile(); advance(120000);
+  assert.equal(card.session.error.items[0].reason, 'motion_timeout');
 });
-test('A target with no updates fails after 30 seconds', () => {
+test('A target with no updates fails after two minutes', () => {
   const { card, advance } = fixture(20, 0);
-  card.remember('top', 50); advance(29999);
+  card.remember('top', 50); advance(119999);
   assert.ok(card.session.targets['cover.top']);advance(1);
-  assert.equal(card.session.error.items[0].reason, 'not_reached');
+  assert.equal(card.session.error.items[0].reason, 'motion_timeout');
 });
 test('Command boundaries still prevent a requested rail crossing', () => {
   const { card } = fixture(60, 40);
@@ -134,34 +134,34 @@ test('Starting a second gesture preserves the first rail target', () => {
   assert.equal(card.displayPositions().top,100);
   assertPair(card.drag.positions,100,80);
 });
-test('A partial report keeps the target visible and extends its deadline', () => {
+test('A partial report keeps the target visible without extending its deadline', () => {
   const {card,update,advance}=fixture(50,0);
   card.remember('top',100);advance(25000);
   update('top',70);card.reconcile();advance(25000);
   assert.equal(card.displayPositions().top,100);
-  assert.equal(card.session.error,'');advance(5000);
+  assert.equal(card.session.error,'');advance(70000);
   assert.equal(card.displayPositions().top,70);
-  assert.equal(card.session.error.items[0].reason,'not_reached');
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
 test('An unrelated attribute update does not extend the deadline', () => {
   const {card,update,advance}=fixture(50,0);
   card.remember('top',100);advance(25000);
-  update('top',50);card._hass.states['cover.top'].attributes.friendly_name='Renamed';card.reconcile();advance(5000);
+  update('top',50);card._hass.states['cover.top'].attributes.friendly_name='Renamed';card.reconcile();advance(95000);
   assert.equal(card.session.targets['cover.top'],undefined);
 });
-test('A moving/stopped state transition extends the deadline', () => {
+test('A moving/stopped state transition does not extend the deadline', () => {
   const {card,update,advance}=fixture(50,0);
   card.remember('top',100);advance(25000);
   update('top',50,'opening');card.reconcile();advance(25000);
   assert.ok(card.session.targets['cover.top']);
-  update('top',50);card.reconcile();advance(29999);
+  update('top',50);card.reconcile();advance(69999);
   assert.ok(card.session.targets['cover.top']);advance(1);
-  assert.equal(card.session.error.items[0].reason,'not_reached');
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
 test('A moving cover at target still needs a stopped report', () => {
   const {card,update,advance}=fixture(50,0);
-  card.remember('top',100);update('top',100,'opening');card.reconcile();advance(30000);
-  assert.equal(card.session.error.items[0].reason,'not_reached');
+  card.remember('top',100);update('top',100,'opening');card.reconcile();advance(120000);
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
 test('Continuous changes cannot extend the two-minute maximum', () => {
   const {card,update,advance}=fixture(0,0);
@@ -170,10 +170,9 @@ test('Continuous changes cannot extend the two-minute maximum', () => {
   advance(19999);assert.ok(card.session.targets['cover.top']);advance(1);
   assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
-test('The two rails have independent inactivity deadlines', () => {
-  const {card,update,advance}=fixture(50,0);
-  card.remember('top',100);card.remember('bottom',100);advance(25000);
-  update('top',70);card.reconcile();advance(5000);
+test('The two rails have independent command deadlines', () => {
+  const {card,advance}=fixture(50,0);
+  card.remember('bottom',100);advance(25000);card.remember('top',100);advance(95000);
   assert.ok(card.session.targets['cover.top']);assert.equal(card.session.targets['cover.bottom'],undefined);
   assert.equal(card.session.error.items[0].id,'cover.bottom');
 });
@@ -181,7 +180,7 @@ test('Replacement target cancels the old deadlines', () => {
   const {card,advance}=fixture(50,0);
   card.remember('top',100);advance(25000);card.remember('top',80);advance(5000);
   assert.equal(card.displayPositions().top,80);assert.equal(card.session.error,'');
-  advance(25000);assert.equal(card.session.error.items[0].reason,'not_reached');
+  advance(115000);assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
 test('Unavailable reports discard pending visualization and timers', () => {
   const {card,update,advance}=fixture(50,0);
@@ -245,9 +244,9 @@ test('Expiry clears its original session after the card changes configuration', 
   const {card,advance}=fixture(50,0);const original=card.session;
   card.remember('top',100);
   card.session={targets:{},commands:{},cards:new Set(),error:''};
-  advance(30000);
+  advance(120000);
   assert.equal(original.targets['cover.top'],undefined);
-  assert.equal(original.error.items[0].reason,'not_reached');
+  assert.equal(original.error.items[0].reason,'motion_timeout');
   assert.equal(card.session.error,'');
 });
 test('Command failure clears its original session after configuration changes', async () => {
@@ -264,18 +263,73 @@ test('Command failure clears its original session after configuration changes', 
 test('An out-of-order report cannot change the target or extend its deadline', () => {
   const {card,update,advance}=fixture(50,0);
   card.remember('top',100);advance(20000);update('top',70);card.reconcile();advance(20000);
-  update('top',60);card._hass.states['cover.top'].last_updated='0000000001';card.reconcile();advance(9999);
+  update('top',60);card._hass.states['cover.top'].last_updated='0000000001';card.reconcile();advance(79999);
   assert.equal(card.displayPositions().top,100);advance(1);
-  assert.equal(card.session.error.items[0].reason,'not_reached');
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
 });
-test('An acknowledgement timeout retains uncertain targets until inactivity expiry', async () => {
+test('An acknowledgement timeout retains uncertain targets until movement expiry', async () => {
   const {card,advance}=fixture(50,0);
   card._hass.callService=()=>new Promise(()=>{});
   const pending=card.send('top',100);advance(15000);await pending;
   assert.equal(card.session.error.items[0].reason,'ack_timeout');
   assert.equal(card.displayPositions().top,100);
-  advance(15000);assert.equal(card.displayPositions().top,50);
-  assert.equal(card.session.error.items[0].reason,'not_reached');
+  advance(105000);assert.equal(card.displayPositions().top,50);
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
+});
+test('Logged 62/67-second sparse Office movements finish without an error',()=>{
+  for(const [start,target,travel] of [[100,0,62000],[0,82,67000]]){
+    const {card,update,advance}=fixture(100,start);
+    card.remember('bottom',target);advance(5000);
+    update('bottom',start,target>start?'opening':'closing');card.reconcile();
+    advance(travel-5000);
+    assert.ok(card.session.targets['cover.bottom']);assert.equal(card.errorText(),'');
+    update('bottom',target);card.reconcile();
+    assert.equal(card.session.targets['cover.bottom'],undefined);assert.equal(card.errorText(),'');
+  }
+});
+test('Late arrival clears a movement-timeout error and its projected target stays removed',()=>{
+  const {card,update,advance}=fixture(20,0);
+  card.remember('top',50);advance(120000);
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
+  assert.equal(card.displayPositions().top,20);
+  update('top',49);card.reconcile();
+  assert.equal(card.errorText(),'');assert.equal(card.session.targets['cover.top'],undefined);
+});
+test('Late arrival clears only the matching rail timeout and preserves other command errors',()=>{
+  const {card,update,advance}=fixture(100,0);
+  card.remember('top',80);card.remember('bottom',80);advance(120000);
+  card.session.error.items.push({id:'cover.bottom',reason:'set_failed'});
+  update('top',80);card.reconcile();
+  assert.equal(card.session.error.items.length,2);
+  assert.ok(card.session.error.items.every(item=>item.id==='cover.bottom'));
+  update('bottom',80);card.reconcile();
+  assert.equal(card.session.error.items.length,1);
+  assert.equal(card.session.error.items[0].reason,'set_failed');
+});
+test('A moving, short or unavailable late report cannot clear a timeout',()=>{
+  const {card,update,advance}=fixture(20,0);
+  card.remember('top',50);advance(120000);
+  for(const [position,state] of [[48,'open'],[50,'opening'],[50,'unavailable']]){
+    update('top',position,state);card.reconcile();
+    assert.equal(card.session.error.items[0].reason,'motion_timeout');
+  }
+  update('top',50);card.reconcile();assert.equal(card.errorText(),'');
+});
+test('Late arrival uses raw coordinates for an inverted top rail',()=>{
+  const {card,update,advance}=fixture(90,0,true);
+  card.remember('top',80);advance(120000);
+  assert.equal(card.session.error.items[0].target,20);
+  update('top',21);card.reconcile();assert.equal(card.errorText(),'');
+});
+test('A stale report cannot clear a timeout and a replacement target supersedes recovery',async()=>{
+  const {card,update,advance}=fixture(20,0);
+  card._hass.callService=async()=>{};
+  card.remember('top',50);advance(60000);update('top',30);card.reconcile();advance(60000);
+  update('top',50);card._hass.states['cover.top'].last_updated='0000000001';card.reconcile();
+  assert.equal(card.session.error.items[0].reason,'motion_timeout');
+  await card.send('top',80);
+  update('top',50);card.reconcile();
+  assert.equal(card.displayPositions().top,80);assert.equal(card.session.error,'');
 });
 // Capture the real handlers without creating a browser or contacting HA.
 function gestureFixture(top=50,bottom=0,invertTop=false) {
@@ -338,7 +392,7 @@ test('Reversing a push preserves a restored pending rail and its original deadli
   await bottomHandle.emit('pointerup');
   assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.bottom');
   assert.equal(card.session.targets['cover.top'],existing);
-  advance(10000);assert.equal(card.session.targets['cover.top'],undefined);
+  advance(100000);assert.equal(card.session.targets['cover.top'],undefined);
   assert.ok(card.session.targets['cover.bottom']);
 });
 test('A new gesture restores to previously committed targets rather than older reports',async()=>{
@@ -388,13 +442,13 @@ test('Moving away from the other rail sends only the dragged rail',async()=>{
   await bottomHandle.emit('pointerup');
   assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.bottom');assert.equal(calls[0].position,20);
 });
-test('An unchanged pending rail keeps its original inactivity deadline',async()=>{
+test('An unchanged pending rail keeps its original movement deadline',async()=>{
   const {card,calls,advance,bottomHandle}=gestureFixture();card.remember('top',100);
   const existing=card.session.targets['cover.top'];advance(20000);
   bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
   await bottomHandle.emit('pointerup');
   assert.equal(calls.length,1);assert.equal(card.session.targets['cover.top'],existing);
-  advance(10000);assert.equal(card.session.targets['cover.top'],undefined);
+  advance(100000);assert.equal(card.session.targets['cover.top'],undefined);
   assert.ok(card.session.targets['cover.bottom']);
 });
 test('Telemetry during a drag does not replace its pending-position snapshot',()=>{
