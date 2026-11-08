@@ -130,10 +130,9 @@ test('Sequential rail requests keep both targets visible past 800ms', async () =
 test('Starting a second gesture preserves the first rail target', () => {
   const {card}=fixture(50,0);
   card.remember('top',100);
-  const start=card.displayPositions().bottom;
-  card.drag={side:'bottom',start,value:80};
+  card.beginEdgeDrag('bottom',1,100);card.moveEdgeDrag(80);
   assert.equal(card.displayPositions().top,100);
-  assert.equal(card.limit('bottom',card.drag.value),80);
+  assertPair(card.drag.positions,100,80);
 });
 test('A partial report keeps the target visible and extends its deadline', () => {
   const {card,update,advance}=fixture(50,0);
@@ -278,6 +277,151 @@ test('An acknowledgement timeout retains uncertain targets until inactivity expi
   advance(15000);assert.equal(card.displayPositions().top,50);
   assert.equal(card.session.error.items[0].reason,'not_reached');
 });
+// Capture the real handlers without creating a browser or contacting HA.
+function gestureFixture(top=50,bottom=0,invertTop=false) {
+  const result=fixture(top,bottom,invertTop),{card}=result,calls=[];
+  function element() {
+    const listeners={};
+    return {listeners,captured:null,
+      addEventListener(type,handler){listeners[type]=handler;},
+      setPointerCapture(id){this.captured=id;},
+      getBoundingClientRect(){return {top:0,left:0,right:100,bottom:136,width:100,height:136};},
+      emit(type,detail={}){return listeners[type]({pointerId:1,button:0,pointerType:'mouse',clientX:50,clientY:100,
+        preventDefault(){},composedPath(){return [];},...detail});}
+    };
+  }
+  const elements={'.top':element(),'.bottom':element(),'.window':element()};
+  card.shadowRoot={querySelector:selector=>elements[selector]};
+  card._hass.callService=async(domain,service,data)=>{calls.push({service,...data});};
+  card.bindEdgeHandle('top');card.bindEdgeHandle('bottom');card.bindTrackTap();
+  return {...result,calls,topHandle:elements['.top'],bottomHandle:elements['.bottom'],track:elements['.window']};
+}
+function assertPair(p,top,bottom) {assert.equal(p.top,top);assert.equal(p.bottom,bottom);}
+test('Bottom pointer drag pushes top and retains the push on reversal until release',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture();
+  bottomHandle.emit('pointerdown');
+  bottomHandle.emit('pointermove',{clientY:25});
+  assertPair(card.drag.positions,75,75);assert.equal(calls.length,0);
+  bottomHandle.emit('pointermove',{clientY:75});
+  assertPair(card.drag.positions,75,25);assert.equal(calls.length,0);
+  await bottomHandle.emit('pointerup');
+  assertPair(card.displayPositions(),75,25);
+  assert.equal(calls.length,2);assert.equal(calls[0].entity_id,'cover.top');
+  assert.equal(calls[0].position,75);assert.equal(calls[1].position,25);
+});
+test('Top pointer drag pushes bottom and retains its lowest position on reversal',async()=>{
+  const {card,calls,topHandle}=gestureFixture(100,50);
+  topHandle.emit('pointerdown');topHandle.emit('pointermove',{clientY:175});
+  assertPair(card.drag.positions,25,25);
+  topHandle.emit('pointermove',{clientY:125});assertPair(card.drag.positions,75,25);
+  assert.equal(calls.length,0);await topHandle.emit('pointerup');
+  assertPair(card.displayPositions(),75,25);
+  assert.equal(calls[0].entity_id,'cover.bottom');assert.equal(calls[0].position,25);
+  assert.equal(calls[1].entity_id,'cover.top');assert.equal(calls[1].position,75);
+});
+test('Pushing bottom all the way up requests both rails at100 within bounds',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture();
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:-500});
+  assertPair(card.drag.positions,100,100);await bottomHandle.emit('pointerup');
+  assert.ok(calls.every(call=>call.position===100));assertPair(card.displayPositions(),100,100);
+});
+test('Pushing top all the way down requests both rails at0 within bounds',async()=>{
+  const {card,calls,topHandle}=gestureFixture(100,50);
+  topHandle.emit('pointerdown');topHandle.emit('pointermove',{clientY:500});
+  assertPair(card.drag.positions,0,0);await topHandle.emit('pointerup');
+  assert.ok(calls.every(call=>call.position===0));assertPair(card.displayPositions(),0,0);
+});
+test('Cancelling a pushed preview sends no commands and preserves existing targets',()=>{
+  const {card,calls,bottomHandle}=gestureFixture();card.remember('top',60);
+  const existing=card.session.targets['cover.top'];
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
+  assertPair(card.drag.positions,80,80);bottomHandle.emit('pointercancel');
+  assert.equal(card.drag,null);assert.equal(calls.length,0);
+  assertPair(card.displayPositions(),60,0);assert.equal(card.session.targets['cover.top'],existing);
+});
+test('Expanded touch grip follows the same push and release handlers',async()=>{
+  const {card,calls,track,bottomHandle}=gestureFixture();
+  track.emit('pointerdown',{pointerType:'touch',clientY:127});
+  assert.equal(card.drag.side,'bottom');assert.equal(bottomHandle.captured,1);
+  bottomHandle.emit('pointermove',{pointerType:'touch',clientY:27});
+  assertPair(card.drag.positions,100,100);assert.equal(calls.length,0);
+  await bottomHandle.emit('pointerup',{pointerType:'touch',clientY:27});
+  assertPair(card.displayPositions(),100,100);assert.equal(calls.length,2);
+});
+test('Moving away from the other rail sends only the dragged rail',async()=>{
+  const {calls,bottomHandle}=gestureFixture(80,40);
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:120});
+  await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,1);assert.equal(calls[0].entity_id,'cover.bottom');assert.equal(calls[0].position,20);
+});
+test('An unchanged pending rail keeps its original inactivity deadline',async()=>{
+  const {card,calls,advance,bottomHandle}=gestureFixture();card.remember('top',100);
+  const existing=card.session.targets['cover.top'];advance(20000);
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:20});
+  await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,1);assert.equal(card.session.targets['cover.top'],existing);
+  advance(10000);assert.equal(card.session.targets['cover.top'],undefined);
+  assert.ok(card.session.targets['cover.bottom']);
+});
+test('Telemetry during a drag does not replace its pending-position snapshot',()=>{
+  const {card,update,bottomHandle}=gestureFixture();card.remember('top',80);
+  bottomHandle.emit('pointerdown');update('top',100);card.reconcile();
+  bottomHandle.emit('pointermove',{clientY:30});assertPair(card.drag.positions,80,70);
+});
+test('A pushed pair converts inverted motor positions only when sending',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture(50,0,true);
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:0});
+  await bottomHandle.emit('pointerup');
+  assertPair(card.displayPositions(),100,100);
+  assert.equal(calls.find(call=>call.entity_id==='cover.top').position,0);
+  assert.equal(calls.find(call=>call.entity_id==='cover.bottom').position,100);
+});
+test('Keyboard End and Home push the blocking rail in either direction',async()=>{
+  const up=gestureFixture();await up.bottomHandle.emit('keydown',{key:'End'});
+  assertPair(up.card.displayPositions(),100,100);assert.equal(up.calls.length,2);
+  const down=gestureFixture(100,50);await down.topHandle.emit('keydown',{key:'Home'});
+  assertPair(down.card.displayPositions(),0,0);assert.equal(down.calls.length,2);
+});
+test('No-op handle release does not send or restart a pending target',async()=>{
+  const {card,calls,bottomHandle}=gestureFixture();card.remember('top',80);
+  const existing=card.session.targets['cover.top'];
+  bottomHandle.emit('pointerdown');await bottomHandle.emit('pointerup');
+  assert.equal(calls.length,0);assert.equal(card.session.targets['cover.top'],existing);
+});
+test('All pushed targets are published together to shared observers',async()=>{
+  const {card,bottomHandle}=gestureFixture();const observed=[];
+  card.render=()=>{if(!card.drag)observed.push(card.displayPositions());};
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:0});await bottomHandle.emit('pointerup');
+  assert.ok(observed.length>0);assert.ok(observed.every(p=>p.top===100 && p.bottom===100));
+});
+test('A partial pushed-pair failure is attributed to the rejected rail',async()=>{
+  const {card,bottomHandle}=gestureFixture();
+  card._hass.callService=async(domain,service,data)=>{if(data.entity_id==='cover.top')throw new Error('rejected');};
+  bottomHandle.emit('pointerdown');bottomHandle.emit('pointermove',{clientY:0});await bottomHandle.emit('pointerup');
+  assert.equal(card.session.targets['cover.top'],undefined);assert.ok(card.session.targets['cover.bottom']);
+  assert.equal(card.session.error.items[0].id,'cover.top');assert.equal(card.session.error.items[0].reason,'set_failed');
+  assert.equal(card.session.error.acceptedOther,true);
+});
+test('Central fabric dragging still preserves coverage and sends on release',async()=>{
+  const {card,calls,track}=gestureFixture(60,20);
+  track.emit('pointerdown',{clientY:70});track.emit('pointermove',{clientY:50});
+  assertPair(card.drag.positions,80,40);assert.equal(calls.length,0);
+  await track.emit('pointerup',{clientY:50});
+  assertPair(card.displayPositions(),80,40);assert.equal(calls.length,2);
+});
+
+test('An untouched grip does not correct a tolerated rounded overlap or new telemetry',async()=>{
+  const {card,calls,topHandle,update}=gestureFixture(32,33);
+  topHandle.emit('pointerdown');update('top',40);card.reconcile();await topHandle.emit('pointerup');
+  assert.equal(calls.length,0);assert.equal(card.drag,null);
+});
+test('Cancelling an expanded touch-grip push discards only the preview',()=>{
+  const {card,calls,track,bottomHandle}=gestureFixture();
+  track.emit('pointerdown',{pointerType:'touch',clientY:127});
+  bottomHandle.emit('pointermove',{pointerType:'touch',clientY:27});bottomHandle.emit('pointercancel');
+  assert.equal(calls.length,0);assert.equal(card.drag,null);assertPair(card.displayPositions(),50,0);
+});
+
 (async()=>{
   for(const {name,run} of cases){
     try { await run();console.log('PASS '+name); }

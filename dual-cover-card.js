@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 0.2.5. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.6. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
@@ -373,37 +373,7 @@ class PlisseCard extends HTMLElement {
     this.style.removeProperty('--plisse-color');
     if (customColor && CSS.supports('color',customColor)) this.style.setProperty('--plisse-color',customColor);
     this.shadowRoot.querySelector('h2').textContent = this.cardTitle();
-    for (const side of ['top', 'bottom']) {
-      const el = this.shadowRoot.querySelector('.' + side);
-      el.addEventListener('pointerdown', e => {
-        if (!this.ready() || this.busy || this.drag) return;
-        e.preventDefault();
-        const start = this.displayPositions()[side];
-        this.drag = { side, id: e.pointerId, value: start, start, y: e.clientY };
-        el.setPointerCapture(e.pointerId);
-        this.render();
-      });
-      el.addEventListener('pointermove', e => {
-        if (this.drag?.side !== side || this.drag.id !== e.pointerId) return;
-        const rect = this.shadowRoot.querySelector('.window').getBoundingClientRect();
-        this.drag.value = this.limit(side, Math.round(this.drag.start - 100 * (e.clientY - this.drag.y) / (rect.height - 36)));
-        this.render();
-      });
-      el.addEventListener('pointerup', e => {
-        if (this.drag?.side !== side || this.drag.id !== e.pointerId) return;
-        const value = this.drag.value;
-        this.drag = null;
-        this.send(side, value);
-      });
-      el.addEventListener('pointercancel', () => { this.drag = null; this.render(); });
-      el.addEventListener('keydown', e => {
-        const delta = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 10, PageDown: -10 }[e.key];
-        if (delta === undefined && e.key !== 'Home' && e.key !== 'End') return;
-        e.preventDefault();
-        if (!this.ready() || this.busy) return;
-        this.send(side, e.key === 'Home' ? 0 : e.key === 'End' ? 100 : this.displayPositions()[side] + delta);
-      });
-    }
+    for (const side of ['top','bottom'])this.bindEdgeHandle(side);
     this.shadowRoot.querySelector('.stop').addEventListener('click', () => this.stopCovers());
     this.shadowRoot.querySelectorAll('[data-coverage]').forEach(button => {
       button.addEventListener('click', () => this.setCoverage(Number(button.dataset.coverage)));
@@ -423,6 +393,55 @@ class PlisseCard extends HTMLElement {
     this.observeSize();
     this.render();
   }
+  bindEdgeHandle(side) {
+    const el=this.shadowRoot.querySelector('.'+side);
+    el.addEventListener('pointerdown',e=>{
+      if(!this.ready() || this.busy || this.drag)return;
+      e.preventDefault();
+      this.beginEdgeDrag(side,e.pointerId,e.clientY);
+      el.setPointerCapture(e.pointerId);
+      this.render();
+    });
+    el.addEventListener('pointermove',e=>{
+      if(this.drag?.side!==side || this.drag.id!==e.pointerId)return;
+      const height=this.trackHeight();
+      this.moveEdgeDrag(Math.round(this.drag.start-100*(e.clientY-this.drag.y)/Math.max(1,height-36)));
+      this.render();
+    });
+    el.addEventListener('pointerup',e=>{
+      if(this.drag?.side!==side || this.drag.id!==e.pointerId)return;
+      const {positions,moved}=this.drag;
+      this.drag=null;
+      if(!moved){this.render();return;}
+      return this.sendPositions(positions,side==='top'?'bottom':'top');
+    });
+    el.addEventListener('pointercancel',()=>{this.drag=null;this.render();});
+    el.addEventListener('keydown',e=>{
+      const delta={ArrowUp:1,ArrowRight:1,ArrowDown:-1,ArrowLeft:-1,PageUp:10,PageDown:-10}[e.key];
+      if(delta===undefined && e.key!=='Home' && e.key!=='End')return;
+      e.preventDefault();
+      if(!this.ready() || this.busy)return;
+      return this.send(side,e.key==='Home'?0:e.key==='End'?100:this.displayPositions()[side]+delta);
+    });
+  }
+  beginEdgeDrag(side,id,y) {
+    const positions=this.displayPositions(),start=positions[side];
+    this.drag={side,id,y,start,moved:false,positions:this.edgePositions(side,start,positions)};
+  }
+  moveEdgeDrag(value) {
+    if(!this.drag || this.drag.side==='both')return;
+    // Feed the previous preview back in: a pushed rail stays at its furthest
+    // position if the dragged rail reverses direction before release.
+    this.drag.positions=this.edgePositions(this.drag.side,value,this.drag.positions);
+    this.drag.moved ||= this.drag.positions[this.drag.side]!==this.drag.start;
+  }
+  edgePositions(side,value,positions=this.displayPositions()) {
+    const p={...positions},position=Math.max(0,Math.min(100,value));
+    p[side]=position;
+    if(side==='top')p.bottom=Math.min(p.bottom,position);
+    else p.top=Math.max(p.top,position);
+    return p;
+  }
   bindTrackTap() {
     const track=this.shadowRoot.querySelector('.window');
     const onHandle=e=>e.composedPath().some(n=>n.classList?.contains('handle'));
@@ -434,8 +453,7 @@ class PlisseCard extends HTMLElement {
       const touchSide=e.pointerType==='touch' ? this.touchGrip(y,rect.height,p) : null;
       if(touchSide){
         e.preventDefault();
-        const start=p[touchSide];
-        this.drag={side:touchSide,id:e.pointerId,value:start,start,y:e.clientY};
+        this.beginEdgeDrag(touchSide,e.pointerId,e.clientY);
         this.shadowRoot.querySelector('.'+touchSide).setPointerCapture(e.pointerId);
         this.render();return;
       }
@@ -459,7 +477,7 @@ class PlisseCard extends HTMLElement {
       if(this.trackTap?.id!==e.pointerId)return;
       this.trackTap=null;
       if(this.drag?.side==='both'){
-        const p=this.drag.positions;this.drag=null;this.sendPair(p.top,p.bottom);return;
+        const p=this.drag.positions;this.drag=null;return this.sendPair(p.top,p.bottom);
       }
       if(onHandle(e) || !this.ready() || this.busy || this.drag)return;
       const rect=track.getBoundingClientRect();
@@ -878,22 +896,27 @@ class PlisseCard extends HTMLElement {
     return this.sendPair(middle,middle);
   }
   async sendPair(top,bottom) {
+    return this.sendPositions({top,bottom});
+  }
+  async sendPositions(positions,firstSide='top') {
+    const {top,bottom}=positions;
     if(this.busy || !this.ready() || !Number.isFinite(top) || !Number.isFinite(bottom) || bottom<0 || top>100 || top<bottom)return;
-    this.drag = null; this.busy = true;
-    this.error = '';
-    // Publish the pair atomically so subscribers never see half a new target.
-    this.remember('top',top,false);this.remember('bottom',bottom,false);
+    this.drag=null;
+    const current=this.displayPositions();
+    const order=firstSide==='bottom'?['bottom','top']:['top','bottom'];
+    const commands=order.filter(side=>positions[side]!==current[side]).map(side=>({side,position:positions[side]}));
+    // Do not restart an unchanged pending rail's command or inactivity timer.
+    if(!commands.length){this.render();return;}
+    this.busy=true;this.session.error='';
+    // Publish all changed targets atomically, before notifying shared views.
+    for(const {side,position} of commands)this.remember(side,position,false);
     plisseNotify(this.session);
     this.render();
-    return this.runCommands([{side:'top',position:top},{side:'bottom',position:bottom}],'set_cover_position');
+    return this.runCommands(commands,'set_cover_position');
   }
-
-  async send(side, value) {
-    if (!this.ready() || this.busy) { this.render(); return; }
-    const position = this.limit(side, value);
-    this.remember(side,position);
-    this.error = ''; this.busy = true; this.render();
-    return this.runCommands([{side,position}],'set_cover_position');
+  async send(side,value) {
+    if(!this.ready() || this.busy){this.render();return;}
+    return this.sendPositions(this.edgePositions(side,value),side==='top'?'bottom':'top');
   }
 
   render() {
@@ -920,7 +943,7 @@ class PlisseCard extends HTMLElement {
     this.shadowRoot.querySelector('.presets').hidden = !showButtons;
     this.shadowRoot.querySelector('ha-card').classList.toggle('buttons',showButtons);
     this.shadowRoot.querySelectorAll('[data-coverage]').forEach(button => { button.disabled = !valid || !!this.busy; });
-    if (this.drag && valid) { if(this.drag.side==='both')Object.assign(p,this.drag.positions);else p[this.drag.side] = this.limit(this.drag.side, this.drag.value); }
+    if(this.drag && valid)Object.assign(p,this.drag.positions);
     let top = p.top ?? 100, bottom = p.bottom ?? 0;
     // Conflicting telemetry collapses the fabric without disabling recovery.
     if(top<bottom){const middle=(top+bottom)/2;top=bottom=middle;}
@@ -953,8 +976,8 @@ class PlisseCard extends HTMLElement {
       el.style.top = (side === 'top' ? visualTop : visualBottom) + 'px';
       el.disabled = !valid || !!this.busy;
       el.setAttribute('aria-valuenow', p[side] ?? 0);
-      el.setAttribute('aria-valuemin', side === 'top' ? Math.min(p.top ?? 0,this.target('bottom') ?? 0) : 0);
-      el.setAttribute('aria-valuemax', side === 'bottom' ? Math.max(p.bottom ?? 100,this.target('top') ?? 100) : 100);
+      el.setAttribute('aria-valuemin',0);
+      el.setAttribute('aria-valuemax',100);
       el.setAttribute('aria-valuetext', p[side] === null ? this.t('unknown') : p[side] + '% '+this.t('height'));
     }
     this.shadowRoot.querySelector('.tv').textContent = p.top === null ? '—' : p.top + '%';

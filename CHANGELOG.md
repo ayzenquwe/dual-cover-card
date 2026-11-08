@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- Push a blocking rail along when dragging an edge beyond it, retaining the pushed position when the drag reverses.
+- Share the behavior across pointer, expanded touch grips and keyboard controls; preserve central dragging and bounded, non-crossing targets.
+- Send changed rail targets together on release, preserving unchanged pending targets and cancelling previews without commands.
+- Add event-level gesture regressions for direction, reversal, bounds, cancellation, pending movement, inversion and partial failures.
+
 ## 0.2.5
 
 - Keep pending rail targets visible and use them consistently for drawing, gestures and movement limits.
