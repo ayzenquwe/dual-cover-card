@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5
+
+- Keep pending rail targets visible and use them consistently for drawing, gestures and movement limits.
+- Replace the 800ms preview and early stopped-short checks with a 30-second inactivity timeout, extended by position or movement-state changes, plus a two-minute overall limit.
+- Preserve pending targets across shared dashboard/popup views; handle arrival, Stop, rejection, replacement and unavailable reports independently per rail.
+- Avoid false overlap errors from mixed-age reports while valid targets are pending and extend simulated lifecycle regressions.
+
 ## 0.2.4
 
 - Tolerate one percentage point of reported rail overlap caused by rounded motor positions, including inverted covers.

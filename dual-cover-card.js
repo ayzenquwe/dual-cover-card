@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-/* Version 0.2.4. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
+/* Version 0.2.5. Home Assistant custom card. Positions are physical heights: 0 bottom, 100 top. */
 // Shared by dashboard instances and their modal, scoped to this HA page.
 const plisseText = {
   "nl": {
@@ -93,7 +93,8 @@ const plisseText = {
     "stop_one_failed": "De stopopdracht is mislukt.",
     "ack_timeout": "Na 15 seconden is geen bevestiging ontvangen. De opdracht kan nog worden uitgevoerd; controleer de cover voordat je opnieuw probeert.",
     "motion_timeout": "De doelpositie is na twee minuten niet bevestigd. Controleer de cover.",
-    "not_reached": "De cover is gestopt voordat de doelpositie werd bereikt.",
+    "target_pending": "Doel",
+    "not_reached": "De doelpositie is niet bereikt en er zijn 30 seconden geen positie- of bewegingswijzigingen ontvangen.",
     "request_accepted": "De opdracht voor de andere cover is wel bevestigd; dit betekent niet dat die al op de doelpositie staat.",
     "command_issues": "Niet alle opdrachten konden worden bevestigd.",
     "compact_orientation": "Compacte indeling",
@@ -170,7 +171,8 @@ const plisseText = {
     "stop_one_failed": "The stop command failed.",
     "ack_timeout": "No acknowledgement was received within 15 seconds. The command may still execute; check the cover before trying again.",
     "motion_timeout": "The target position was not confirmed within two minutes. Check the cover.",
-    "not_reached": "The cover stopped before reaching its target position.",
+    "target_pending": "Target",
+    "not_reached": "The target was not reached and no position or movement changes were received for 30 seconds.",
     "request_accepted": "The command for the other cover was acknowledged; this does not mean it has reached its target yet.",
     "command_issues": "Not all commands could be confirmed.",
     "compact_orientation": "Compact orientation",
@@ -186,6 +188,8 @@ const plisseSessions = new Map();
 // Whole-percentage motor reports can differ by one point at a meeting edge
 // or after arriving. This tolerates reports only; command limits stay strict.
 const PLISSE_POSITION_TOLERANCE = 1;
+const PLISSE_INACTIVITY_TIMEOUT = 30000;
+const PLISSE_MOTION_TIMEOUT = 120000;
 function plisseNotify(session) {
   for (const card of session.cards) card.render();
 }
@@ -258,7 +262,6 @@ class PlisseCard extends HTMLElement {
     this.closePopup();
     this.operation=(this.operation || 0)+1;this.busy=false;
     this.session?.cards.delete(this);
-    this.clearFeedback();
     this.clearGestures();
     this.drag = null;
     this.config = {compact_orientation:'vertical', ...config, size: config.size || 'medium', open_popup: config.open_popup ?? true, invert_top:config.invert_top ?? false,invert_bottom:config.invert_bottom ?? false };
@@ -376,7 +379,6 @@ class PlisseCard extends HTMLElement {
         if (!this.ready() || this.busy || this.drag) return;
         e.preventDefault();
         const start = this.displayPositions()[side];
-        this.clearFeedback();
         this.drag = { side, id: e.pointerId, value: start, start, y: e.clientY };
         el.setPointerCapture(e.pointerId);
         this.render();
@@ -432,7 +434,7 @@ class PlisseCard extends HTMLElement {
       const touchSide=e.pointerType==='touch' ? this.touchGrip(y,rect.height,p) : null;
       if(touchSide){
         e.preventDefault();
-        const start=p[touchSide];this.clearFeedback();
+        const start=p[touchSide];
         this.drag={side:touchSide,id:e.pointerId,value:start,start,y:e.clientY};
         this.shadowRoot.querySelector('.'+touchSide).setPointerCapture(e.pointerId);
         this.render();return;
@@ -447,7 +449,6 @@ class PlisseCard extends HTMLElement {
       if(!this.ready() || this.busy){this.trackTap=null;this.drag=null;this.render();return;}
       if(Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>8 || this.drag?.side==='both'){
         if(!tap.fabric){this.trackTap=null;return;}
-        this.clearFeedback();
         const height=track.getBoundingClientRect().height;
         this.drag={side:'both',id:e.pointerId,positions:this.shiftPair(tap.positions,Math.round((tap.y-e.clientY)*100/Math.max(1,height-36)))};
         this.render();
@@ -651,29 +652,43 @@ class PlisseCard extends HTMLElement {
     const t=this.session?.targets[id];
     return t ? this.convertPosition(side,t.value) : this.positions()[side];
   }
-  remember(side,value) {
-    const id=this.config[side==='top'?'top_entity':'bottom_entity'];
+  arrived(state,target) {
+    return state && !['opening','closing','unknown','unavailable'].includes(state.state)
+      && typeof state.attributes.current_position==='number'
+      && Math.abs(state.attributes.current_position-target.value)<=PLISSE_POSITION_TOLERANCE;
+  }
+  remember(side,value,notify=true) {
+    const id=this.entityId(side);
     this.forget(id);
-    const t={value:this.convertPosition(side,value),created:Date.now(),moving:false,progress:false,lastPosition:this._hass?.states[id]?.attributes.current_position,lastState:this._hass?.states[id]};
+    const t={value:this.convertPosition(side,value),created:Date.now(),lastState:this._hass?.states[id]};
     const session=this.session;
-    t.timer=setTimeout(()=>{
+    const expire=reason=>{
       if(session.targets[id]!==t)return;
-      delete session.targets[id];
-      const live=[...session.cards].find(c=>c._hass);
-      const reported=live?._hass.states[id];
-      if(live && (typeof reported?.attributes.current_position!=='number' || Math.abs(reported.attributes.current_position-t.value)>PLISSE_POSITION_TOLERANCE)){
+      // A dashboard and its popup share targets, but may receive HA updates in
+      // different order. Use the newest known report when the timer fires.
+      let state=t.lastState;
+      for(const card of session.cards){
+        const candidate=card._hass?.states[id];
+        if(candidate && (!state || (candidate.last_updated || '')>=(state.last_updated || '')))state=candidate;
+      }
+      this.forget(id,t,session);
+      if(!this.arrived(state,t)){
         const items=session.error?.items || [];
-        session.error={items:[...items.filter(i=>i.id!==id),{id,reason:'motion_timeout'}]};
+        session.error={items:[...items.filter(i=>i.id!==id),{id,reason}]};
       }
       plisseNotify(session);
-    },120000);
-    this.session.targets[id]=t;
-    plisseNotify(this.session);return t;
+    };
+    t.expire=expire;
+    t.timer=setTimeout(()=>expire('motion_timeout'),PLISSE_MOTION_TIMEOUT);
+    t.idleTimer=setTimeout(()=>expire('not_reached'),PLISSE_INACTIVITY_TIMEOUT);
+    session.targets[id]=t;
+    if(notify)plisseNotify(session);
+    return t;
   }
-  forget(id,expected) {
-    const old=this.session?.targets[id];
+  forget(id,expected,session=this.session) {
+    const old=session?.targets[id];
     if(!old || (expected && old!==expected))return;
-    clearTimeout(old.timer);clearTimeout(old.stopTimer);delete this.session.targets[id];
+    clearTimeout(old.timer);clearTimeout(old.idleTimer);delete session.targets[id];
   }
   reconcile() {
     if(!this.session || !this._hass)return;
@@ -682,35 +697,21 @@ class PlisseCard extends HTMLElement {
       const t=this.session.targets[id],s=this._hass.states[id];if(!t)continue;
       if(s===t.lastState)continue;
       if(s?.last_updated && t.lastState?.last_updated && s.last_updated<t.lastState.last_updated)continue;
+      const previous=t.lastState;
       t.lastState=s;
-      const moving=['opening','closing'].includes(s?.state),pos=s?.attributes.current_position;
-      if(typeof pos==='number' && typeof t.lastPosition==='number' && Math.abs(pos-t.value)<Math.abs(t.lastPosition-t.value))t.progress=true;
-      t.lastPosition=pos;
-      clearTimeout(t.stopTimer);t.stopTimer=null;
-      if(!s || ['unavailable','unknown'].includes(s.state) || (typeof pos==='number' && Math.abs(pos-t.value)<=PLISSE_POSITION_TOLERANCE && !moving)){
+      if(!s || ['unavailable','unknown'].includes(s.state) || typeof s.attributes.current_position!=='number' || this.arrived(s,t)){
         this.forget(id,t);changed=true;continue;
       }
-      if(moving)t.moving=true;
-      if(!moving && t.progress){
-        const session=this.session;
-        t.stopTimer=setTimeout(()=>{
-          if(session.targets[id]!==t || ['opening','closing'].includes(t.lastState?.state))return;
-          const latest=t.lastState?.attributes.current_position;
-          if(typeof latest!=='number' || Math.abs(latest-t.value)<=PLISSE_POSITION_TOLERANCE)return;
-          clearTimeout(t.timer);delete session.targets[id];
-          session.error={items:[...(session.error?.items || []).filter(i=>i.id!==id),{id,reason:'not_reached'}]};
-          plisseNotify(session);
-        },Math.max(5000,8000-(Date.now()-t.created)));
+      // Entity objects can also change for unrelated attributes. Only position
+      // or movement changes extend the inactivity deadline, never the hard cap.
+      if(s.state!==previous?.state || s.attributes.current_position!==previous?.attributes.current_position){
+        clearTimeout(t.idleTimer);
+        t.idleTimer=setTimeout(()=>t.expire('not_reached'),PLISSE_INACTIVITY_TIMEOUT);
       }
     }
     if(changed)plisseNotify(this.session);
   }
-  clearFeedback() {
-    clearTimeout(this.feedbackTimer);
-    this.feedbackTimer = null;
-    this.feedback = null;
-  }
-  disconnectedCallback() { this.closePopup(); this.session?.cards.delete(this); this.clearGestures(); this.clearFeedback(); this.drag = null; this.resizeObserver?.disconnect(); this.trackObserver?.disconnect(); }
+  disconnectedCallback() { this.closePopup(); this.session?.cards.delete(this); this.clearGestures(); this.drag = null; this.resizeObserver?.disconnect(); this.trackObserver?.disconnect(); }
   connectedCallback() { this.session?.cards.add(this); this.observeSize(); this.render(); }
   observeSize() {
     if (!this.config) return;
@@ -768,8 +769,8 @@ class PlisseCard extends HTMLElement {
     return Math.round(coverage) + '%' + (this.activeSize === 'small' ? '' : ' ' + w[0]);
   }
   displayPositions() {
-    const p = this.positions();
-    if (this.feedback && this.ready()) return { ...this.feedback.positions };
+    const p=this.positions();
+    if(this.ready())for(const side of ['top','bottom'])p[side]=this.target(side);
     return p;
   }
   set hass(value) { this._hass = value;
@@ -805,7 +806,7 @@ class PlisseCard extends HTMLElement {
       const issue=this.coverProblem(side);
       if(issue){const id=this.entityId(side),name=this._hass?.states[id]?.attributes.friendly_name || id;lines.push(this.t(side+'_entity')+' ('+name+'): '+this.t(issue));}
     }
-    const p=this.positions();
+    const p=this.displayPositions();
     if(this.ready() && p.bottom-p.top>PLISSE_POSITION_TOLERANCE)lines.push(this.t('overlap'));
     return [...new Set(lines)].join('\n');
   }
@@ -831,14 +832,14 @@ class PlisseCard extends HTMLElement {
     const failed=[];let acceptedOther=false;
     results.forEach((result,i)=>{
       const entry=entries[i];if(session.commands[entry.id]!==entry.token)return;
+      if(entry.target && session.targets[entry.id] && session.targets[entry.id]!==entry.target)return;
       if(result.status==='fulfilled'){acceptedOther=true;return;}
       const timeout=result.reason?.plisseTimeout===true;
-      if(!timeout && entry.target && session.targets[entry.id]===entry.target){clearTimeout(entry.target.timer);delete session.targets[entry.id];}
+      if(!timeout && entry.target)this.forget(entry.id,entry.target,session);
       failed.push({id:entry.id,reason:timeout?'ack_timeout':service==='stop_cover'?'stop_one_failed':'set_failed'});
     });
     if(failed.length){
       session.error={items:failed,acceptedOther};
-      if(this.config===config && this.operation===operation)this.clearFeedback();
     }
     if(this.config===config && this.operation===operation){this.busy=false;this.render();}
     plisseNotify(session);
@@ -855,7 +856,7 @@ class PlisseCard extends HTMLElement {
   }
   async stopCovers() {
     if(this.setup)return;
-    for(const card of this.session.cards){card.clearFeedback();card.clearGestures();card.drag=null;}
+    for(const card of this.session.cards){card.clearGestures();card.drag=null;}
     this.error = '';
     this.forget(this.config.top_entity);this.forget(this.config.bottom_entity);plisseNotify(this.session);
     this.render();
@@ -872,17 +873,17 @@ class PlisseCard extends HTMLElement {
   }
   async openShades() {
     if(!this.ready() || this.busy)return;
-    const p=this.positions();
+    const p=this.displayPositions();
     const middle=Math.round((p.top+p.bottom)/2);
     return this.sendPair(middle,middle);
   }
   async sendPair(top,bottom) {
     if(this.busy || !this.ready() || !Number.isFinite(top) || !Number.isFinite(bottom) || bottom<0 || top>100 || top<bottom)return;
-    this.clearFeedback(); this.drag = null; this.busy = true;
-    this.feedback = {positions:{top,bottom}};
+    this.drag = null; this.busy = true;
     this.error = '';
-    this.remember('top',top);this.remember('bottom',bottom);
-    this.feedbackTimer = setTimeout(() => { this.feedback = null; this.feedbackTimer = null; this.render(); },800);
+    // Publish the pair atomically so subscribers never see half a new target.
+    this.remember('top',top,false);this.remember('bottom',bottom,false);
+    plisseNotify(this.session);
     this.render();
     return this.runCommands([{side:'top',position:top},{side:'bottom',position:bottom}],'set_cover_position');
   }
@@ -890,19 +891,7 @@ class PlisseCard extends HTMLElement {
   async send(side, value) {
     if (!this.ready() || this.busy) { this.render(); return; }
     const position = this.limit(side, value);
-    this.clearFeedback();
-    const preview = this.positions();
-    preview[side] = position;
-    if(preview.top<preview.bottom)preview[side==='top'?'bottom':'top']=this.target(side==='top'?'bottom':'top');
-    this.feedback = { positions: preview };
-    // Publish only after feedback exists: subscribers must never render stale positions on release.
     this.remember(side,position);
-    // Send immediately; retain release feedback independently of HA updates.
-    this.feedbackTimer = setTimeout(() => {
-      this.feedback = null;
-      this.feedbackTimer = null;
-      this.render();
-    }, 800);
     this.error = ''; this.busy = true; this.render();
     return this.runCommands([{side,position}],'set_cover_position');
   }
@@ -936,7 +925,7 @@ class PlisseCard extends HTMLElement {
     // Conflicting telemetry collapses the fabric without disabling recovery.
     if(top<bottom){const middle=(top+bottom)/2;top=bottom=middle;}
     const track = this.shadowRoot.querySelector('.window');
-    track.classList.toggle('follow', !this.drag && !this.feedback);
+    track.classList.toggle('follow', !this.drag);
     const fabric = this.shadowRoot.querySelector('.fabric');
     // Keep the 36px minimum fabric; each grip sits 9px from its end.
     const yTop = 18 + (100 - top) * (this.trackHeight() - 36) / 100;
@@ -972,7 +961,7 @@ class PlisseCard extends HTMLElement {
     this.shadowRoot.querySelector('.bv').textContent = p.bottom === null ? '—' : p.bottom + '%';
     const hasError=this.hasError();
     this.shadowRoot.querySelector('.summary').hidden = !hasError && !this.inModal && this.config.show_status === false;
-    this.shadowRoot.querySelector('.summary').textContent = this.setup ? this.t('select_covers') : hasError ? this.t('error_status') : this.status(top, bottom, valid);
+    this.shadowRoot.querySelector('.summary').textContent = this.setup ? this.t('select_covers') : hasError ? this.t('error_status') : (Object.keys(this.session?.targets || {}).length ? this.t('target_pending')+': ' : '')+this.status(top, bottom, valid);
     this.updateInteractionState();
     this.updateResponsiveLayout(this.getBoundingClientRect().width);
     const labels = this.shadowRoot.querySelectorAll('.values span');

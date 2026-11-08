@@ -2,7 +2,7 @@
 
 A Home Assistant dashboard card for top-down/bottom-up blinds and honeycomb shades with independently controlled top and bottom edges. Originally built by [kevinconsen](https://github.com/KevinConsen).
 
-This [fork](https://github.com/ayzenquwe/dual-cover-card) adds a one-percentage-point tolerance for rounded motor position reports and target arrival. It preserves the upstream card types and configuration. [Upstream repository](https://github.com/KevinConsen/dual-cover-card).
+This [fork](https://github.com/ayzenquwe/dual-cover-card) adds consistent pending-target visualization and a one-percentage-point tolerance for rounded motor position reports and target arrival. It preserves the upstream card types and configuration. [Upstream repository](https://github.com/KevinConsen/dual-cover-card).
 
 - Shows the covered part of the window between two draggable edges.
 - Drag the middle to move both covers while keeping the same coverage.
@@ -95,7 +95,7 @@ The 50%, 75% and 100% presets refer to **window coverage**, not entity position.
 - Focus an edge and use arrow keys (1%), Page Up/Down (10%) or Home/End.
 - Focus the middle and use Up/Down or Page Up/Down to shift both covers.
 
-Commands are sent on release. The selected position remains visible for 800ms before returning to reported movement.
+Commands are sent on release. Each requested rail position remains visible as a pending target until the rail reports arrival within one percentage point and is no longer moving. The status is prefixed with **Target** while a request is pending. Drawing and drag limits use the same pending positions, so you can adjust the second rail while the first is moving.
 
 ## Error handling
 
@@ -103,7 +103,9 @@ Reported rail overlap of up to one percentage point is tolerated, as is target a
 
 An error changes the card status to **Error**. Tap the card for details, even if the popup is normally disabled. The popup identifies missing/unavailable entities, invalid positions and failed commands per cover.
 
-If Home Assistant does not acknowledge a command within 15 seconds, the UI becomes available again and shows a warning. The command might still execute; the card never retries automatically. A known target expires after two minutes and may generate a warning if arrival was not confirmed.
+If Home Assistant does not acknowledge a command within 15 seconds, the UI becomes available again and shows a warning. The command might still execute; the card never retries automatically. An acknowledgement timeout retains the pending target because execution is uncertain; an explicit command rejection removes it.
+
+A pending target expires with an error after **30 seconds without a position or movement-state change**, or after **two minutes overall**. Relevant changes restart only the 30-second deadline; unrelated attributes and duplicate unchanged values do not. Stop clears both pending targets. Unavailable or unknown positions return the display to the reported availability state.
 
 Known targets help constrain new edge movements while another cover is moving. Commands from other apps or browser sessions are not known as targets. Reported movement and arrival depend on the cover integration.
 
